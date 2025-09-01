@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Hyperliquid — Live % Changes</title>
+<style>
+  :root{
+  --base-font-size:14px;
+    --bg:#0b0d10; 
+    --surface:#0d1217; 
+    --surface-2:#0f1419;
+    --border:#1a1a1a; 
+    --fg:#e8eef3; 
+    --muted:#aab7c4;
+    --pos:#16c784; 
+    --neg:#ea3943; 
+    --accent:#86b9ff; 
+    --accent-2:#5ca8ff;
+
+    /* layout rhythm */
+    --gap:16px;
+    --pad-h:16px;
+    --pad-v:14px;
+    --wrap-margin:clamp(12px,2vh,20px);
+
+    /* measured at runtime to align chart to table content */
+    --chart-pad-r:16px;      /* distance from canvas right edge to plot end */
+    --chart-pad-l-base:100px;/* min left pad to align with PRICE */
+    --chart-left-nudge:-6px; /* negative moves plot slightly further left to match table dividers */
+
+    /* footer */
+    --footer-height:56px;
+    /* fixed viewport gutters for both widgets and footer */
+    --side-gutter: clamp(12px, 2vw, 24px);
+  }
+
+  /* Center the entire dashboard (falls back on short screens) */
+  html,body{height:100%}
+  body{
+    min-height:100svh; margin:0;
+    background:var(--bg); color:var(--fg);
+  font-size:var(--base-font-size);
+  /* Use the system UI / Apple font stack for a native Apple-like look */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-variant-numeric:tabular-nums;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    display:flex; align-items:center; justify-content:center;
+    padding-bottom: calc(var(--footer-height) + var(--wrap-margin));
+  }
+  @media (max-height:780px){ body{ align-items:flex-start; } }
+
+  /* Outer container: fixed gutters vs viewport and a max content width */
+  .wrap{
+    box-sizing:border-box;
+    width:100%;
+    max-width:1600px;
+    margin:var(--wrap-margin) auto;
+    padding-inline: var(--side-gutter);
+    position:relative;
+    min-height: calc(100svh - var(--footer-height));
+    display:flex; align-items:center;
+  }
+
+  /* Outer card: make background/border transparent by default (panels keep their own surface) */
+  .card{
+    background: transparent; /* was a gradient using --surface / --surface-2 */
+    border:1px solid transparent; /* keep layout but visually remove the border */
+    border-radius:14px;
+    width:100%;
+  }
+  .screen{ padding:var(--pad-v) var(--pad-h); display:flex; flex-direction:column; gap:var(--gap); }
+
+  /* Panels */
+  .panel{ background:linear-gradient(180deg,var(--surface) 0%,var(--surface-2) 100%); border:1px solid var(--border); border-radius:14px; padding:12px var(--pad-h); min-width:0; }
+
+  /* Table */
+  .panel-table{ overflow:hidden; }
+  .table-wrap{ width:100%; overflow-x:auto; overflow-y:hidden; }
+  table.data{
+    width:100%;
+    border-collapse:separate; border-spacing:0; table-layout:fixed;
+  /* min-width is computed in JS from 10ch * column count */
+  }
+
+  /* ---- UNIFORM COLUMNS (smaller min width for denser layout) ---- */
+  table.data col { width: var(--colw, 6ch); }
+  thead th, tbody td{
+    /* reduce the min to 10ch so columns can be narrower */
+    min-width:10ch;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+
+  thead th{
+    position:sticky; top:0; z-index:1;
+    background:transparent;
+    border-bottom:1px solid var(--border);
+    color:var(--muted); padding:10px 8px;
+  }
+  thead th:first-child{ text-align:left; }
+  thead th.num{ text-align:right; }
+  tbody td{ padding:10px 8px; border-bottom:1px solid var(--border); }
+  td.coin{ display:flex; align-items:center; gap:8px; text-align:left; letter-spacing:.1px; }
+  td.num, th.num{ text-align:right; }
+  /* Use a single solid separator color for consistency */
+  .group-sep{ border-left:1px solid var(--border); }
+
+  /* Cleaned duplicates: sel-dot defined once */
+  .sel-dot{ width:7px; height:7px; border-radius:999px; background:var(--accent); opacity:.9; visibility:hidden; }
+  .row-selected .sel-dot{ visibility:visible; }
+  body.chart-off .sel-dot{ display:none !important; }
+
+  .muted{ color:var(--muted); }
+  .pos{ color:var(--pos); } .neg{ color:var(--neg); }
+
+  /* Hover “elevate” — apply only on devices that support hover (desktop) */
+  tbody tr{
+    cursor:pointer;
+    transition:transform .12s ease, box-shadow .12s ease, background-color .12s ease;
+    /* remove the native tap highlight on mobile browsers */
+    -webkit-tap-highlight-color: rgba(0,0,0,0);
+    touch-action: manipulation;
+  }
+  /* Reduce hover shadow and use a subtle background so separators don't change contrast */
+  @media (hover: hover) and (pointer: fine) {
+    tbody tr:hover{ transform:translateX(-1px); background:rgba(133, 184, 255, 0.1); box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  }
+
+  /* Prevent mobile browsers from leaving a persistent focus/active highlight on rows */
+  tbody tr:focus, tbody tr:active, tbody tr:focus-visible{
+    outline: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* Selection inverse (highlight) */
+  ::selection{ background:#fff; color:#000; }
+  ::-moz-selection{ background:#fff; color:#000; }
+
+  /* Flash on price update */
+  @keyframes flashUp{0%{background:rgba(22,199,132,.17)}100%{background:transparent}}
+  @keyframes flashDown{0%{background:rgba(234,57,67,.17)}100%{background:transparent}}
+  td.flash-up{ animation:flashUp .28s ease; font-weight:700; }
+  td.flash-down{ animation:flashDown .28s ease; font-weight:700; }
+  @media (prefers-reduced-motion:reduce){ td.flash-up,td.flash-down{ animation:none; } }
+
+  /* Chart */
+  .panel-chart{ position:relative; }
+  .chart-head{
+    display:flex; align-items:center; justify-content:space-between; color:var(--muted);
+    margin:0 0 8px 0;
+    padding-right:8px; /* timestamp aligns with rightmost table content (cell padding) */
+    position:relative; /* allow absolute positioning of the axis for pixel-perfect alignment */
+  }
+  canvas#chart{
+    width:100%; height:300px; display:block; border:none; border-radius:12px;
+    background:transparent; /* transparent area behind chart */
+  }
+
+  /* Footer / status bar */
+  .footer{
+    position:fixed; left:0; right:0; bottom:0; z-index:60;
+    display:flex; justify-content:center; pointer-events:auto;
+  }
+
+  /* Hide scrollbars visually for kiosk mode (Chromium) while keeping scroll behavior.
+    Also disable vertical page scrolling entirely for a locked kiosk view; overlays
+    (fixed position) keep their internal scrolling via their own overflow rules. */
+  /* Firefox */
+  html, body { scrollbar-width: none; -ms-overflow-style: none; overflow-y: hidden; }
+  /* WebKit/Chromium */
+  html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; }
+  /* Hide the horizontal scrollbar on the table wrapper but keep scrolling via wheel/trackpad */
+  .table-wrap { scrollbar-width: none; -ms-overflow-style: none; }
+  .table-wrap::-webkit-scrollbar { height: 0; }
+
+  .footer .inner{
+    box-sizing:border-box;
+    /* leave a consistent horizontal margin so the status bar doesn't touch the viewport edges */
+    width: calc(100% - (var(--side-gutter) * 2));
+    margin-inline: var(--side-gutter);
+    padding:10px 0 14px 0;
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+    color:var(--muted);
+    background:transparent;
+    border:none; border-radius:0;
+  }
+  .hint{ display:flex; gap:10px; flex-wrap:wrap; }
+  .kbd{ background:rgba(255,255,255,.04); border:1px solid var(--border); padding:2px 6px; border-radius:6px; font:inherit; color:var(--fg); }
+
+  /* Keep lookbacks present (don’t hide) so horizontal scroll works consistently */
+  @media (max-width:1200px){ col.lb-30d, th.lb-30d, td.lb-30d{display:table-cell;} }
+  @media (max-width:1100px){ col.lb-7d,  th.lb-7d,  td.lb-7d {display:table-cell;} }
+  @media (max-width:1020px){ col.lb-24h, th.lb-24h, td.lb-24h{display:table-cell;} }
+  @media (max-width:940px) { col.lb-3h,  th.lb-3h,  td.lb-3h {display:table-cell;} }
+  @media (max-width:880px) { col.lb-1h,  th.lb-1h,  td.lb-1h {display:table-cell;} }
+  @media (max-width:820px) { col.lb-30m, th.lb-30m, td.lb-30m{display:table-cell;} }
+
+  /* Ensure base font size remains consistent on mobile */
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) {
+    :root{ --base-font-size:12px; }
+  }
+
+  /* Hide keyboard shortcut hints in the status/footer on mobile */
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) {
+    .footer .hint { display: none !important; }
+  }
+
+  /* Strong mobile lock: prevent any page-level vertical scroll or rubber-band while
+     keeping internal scroll on .screen and .table-wrap. This uses position:fixed
+     to lock the document and overscroll-behavior to stop chaining. */
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) {
+    html, body {
+      height: 100vh !important;
+      overflow: hidden !important;
+      overscroll-behavior: none !important;
+      -webkit-overflow-scrolling: auto !important;
+    }
+    /* Fix body to viewport to completely prevent page scroll */
+    body {
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100% !important;
+    }
+
+    /* internal scrollers stay scrollable */
+    .screen{ overflow:auto; -webkit-overflow-scrolling: touch; }
+    .table-wrap{ overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling: touch; }
+
+    /* selection + highlight off on touch, but keep it for form controls */
+    * { -webkit-user-select: none !important; user-select: none !important; }
+    ::selection { background: transparent !important; color: inherit !important; }
+    input, textarea, select, button, [contenteditable="true"] {
+      -webkit-user-select: text !important; user-select: text !important;
+    }
+  }
+
+  /* iOS/iPadOS niceties: kill callouts and tap highlights globally, allow in inputs */
+  /* kill tap highlight */
+  * { -webkit-tap-highlight-color: transparent; }
+  /* kill long-press callout */
+  html, body, * { -webkit-touch-callout: none; }
+  /* allow callout inside editors/inputs */
+  input, textarea, select, button, [contenteditable="true"] { -webkit-touch-callout: default; }
+
+  /* Context menu + bulk editor */
+  .ctxmenu{ position:fixed; z-index:9999; min-width:220px;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    box-shadow:0 10px 30px rgba(0,0,0,.35); overflow:hidden; }
+  .ctxmenu .hdr{ padding:8px 12px; color:var(--muted); border-bottom:1px solid var(--border); font-weight:600; }
+  .ctxmenu button{ all:unset; display:block; width:100%; padding:10px 12px; cursor:pointer; }
+  .ctxmenu button:hover{ background:rgba(255,255,255,.06); }
+
+  #ctxMenu.bulk-editor{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.45); z-index:99999; padding:20px; box-sizing:border-box;
+    backdrop-filter: blur(6px) saturate(1.05); -webkit-backdrop-filter: blur(6px) saturate(1.05);
+  }
+  body.editor-open .wrap > .card{ transition:filter .18s ease; filter:brightness(.78) saturate(.9); }
+
+  /* Editor panel */
+  #ctxMenu.bulk-editor .editor{
+    display:flex;
+    flex-direction:column;
+    overflow:visible; /* let the inner scroller handle overflow */
+    background: rgba(0,0,0,0.6);
+    border-radius:12px;
+    padding:12px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.45);
+    box-sizing: border-box;
+    width: auto; max-width: calc(100% - 48px);
+  }
+
+  /* Table inside editor */
+  #ctxMenu.bulk-editor .editor > div[style*="overflow:auto"],
+  #ctxMenu.bulk-editor .editor > .scroll {
+    max-height:60vh;
+    overflow:auto;
+  }
+  #ctxMenu.bulk-editor .editor h3{ display:none; }
+  #ctxMenu.bulk-editor table.editor-table{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:var(--base-font-size); font-family:inherit; }
+  #ctxMenu.bulk-editor table.editor-table th, #ctxMenu.bulk-editor table.editor-table td{ padding:8px 6px; border-bottom:1px solid var(--border); }
+  #ctxMenu.bulk-editor table.editor-table thead th{ padding-left:14px; padding-right:12px; }
+  #ctxMenu.bulk-editor table.editor-table th.num, #ctxMenu.bulk-editor table.editor-table td.num{ text-align:right; }
+  #ctxMenu.bulk-editor input.num{ text-align:right; }
+  #ctxMenu.bulk-editor .editor-new-row td.add{ padding:8px; }
+  #ctxMenu.bulk-editor .editorAdd{
+    display:flex; align-items:center; justify-content:flex-start; width:100%; height:28px; padding:0 6px; box-sizing:border-box;
+  border-radius:6px; border:1px dashed transparent; cursor:pointer; font-weight:700; font-size:calc(var(--base-font-size) + 2px);
+    background:transparent; color:var(--muted);
+  }
+  #ctxMenu.bulk-editor .editorAdd:hover{ background:rgba(255,255,255,.02); border-color:var(--border); color:var(--fg); }
+  #ctxMenu.bulk-editor .editorDel{ background:transparent; border:none; color:var(--muted); padding:6px 8px; cursor:pointer; font-size:calc(var(--base-font-size) + 2px); line-height:1; }
+  #ctxMenu.bulk-editor .editorDel:hover{ color:var(--accent); }
+  #ctxMenu.bulk-editor .editorDelWrap{
+    display:flex; align-items:center; justify-content:flex-end; width:100%; height:28px; padding:0 6px; box-sizing:border-box; background:transparent; border-radius:6px; border:1px solid transparent;
+  }
+  #ctxMenu.bulk-editor .editorDelWrap:hover{ background:rgba(255,255,255,.02); border-color:var(--border); }
+  #ctxMenu.bulk-editor .editorDelWrap:focus{ outline:none; box-shadow:0 0 0 3px rgba(92,168,255,.08); border-color:var(--accent-2); }
+
+  /* Clean, single definitions */
+  #ctxMenu.bulk-editor .editor-footer{
+    display:flex;
+    justify-content:flex-end;
+    align-items:center;
+    gap:12px;
+    margin-top:8px;
+  }
+  #ctxMenu.bulk-editor .btns{
+    display:flex;
+    gap:8px;
+    justify-content:flex-end;
+    align-items:center;
+    margin:0;
+  }
+  #ctxMenu.bulk-editor input[type=text], #ctxMenu.bulk-editor input[type=number]{
+    width:100%; background:transparent; border:none; color:var(--fg);
+    padding:0 6px; border-radius:0; font-family:inherit; font-size:var(--base-font-size); font-variant-numeric:tabular-nums;
+    height:28px; box-sizing:border-box;
+  }
+  #ctxMenu.bulk-editor table.editor-table input{ background:transparent; border:none; padding:0 6px; }
+  #ctxMenu.bulk-editor table.editor-table input:focus{ outline:1px dashed rgba(255,255,255,.06); }
+  #ctxMenu.bulk-editor .btn{
+    background:rgba(255,255,255,.04); border:1px solid var(--border); padding:6px 10px; border-radius:8px; cursor:pointer; color:var(--fg); font-family:inherit; font-size:var(--base-font-size);
+  }
+</style>
+<script id="touch-alias-script">(function(){
+  // Add .touch to <html> on iPadOS and similar devices that support touch but
+  // may report a fine pointer/hover (so media queries miss them).
+  try{
+    var isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
+    // iPadOS 13+ and some tablets report a Mac-like pointer; detect by presence of touch + platform
+    var isiPadLike = isTouch && /Mac|iPad|iPhone/.test(navigator.platform || navigator.userAgent);
+    if(isiPadLike){ document.documentElement.classList.add('touch'); }
+  }catch(e){}
+})();</script>
+<style id="touch-alias-css">
+/* Alias the mobile media-query rules when .touch is present on <html> */
+html.touch { --base-font-size: 12px; }
+html.touch .footer .hint { display: none !important; }
+
+/* Strong mobile lock alias for html.touch to mirror the media-query lock */
+html.touch, html.touch body {
+  height: 100vh !important;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  -webkit-overflow-scrolling: auto !important;
+}
+html.touch body {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+}
+html.touch .screen,
+html.touch .table-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
+
+/* Disable selection and tap highlights on touch alias while allowing form controls */
+html.touch * { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; -webkit-tap-highlight-color: transparent !important; }
+html.touch input, html.touch textarea, html.touch select, html.touch [contenteditable] { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; -webkit-tap-highlight-color: initial !important; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="screen">
+        <!-- TABLE -->
+        <div class="panel panel-table">
+          <div class="table-wrap">
+            <table class="data">
+              <colgroup>
+                <col class="c-coin" />
+                <col class="c-price" />
+                <col class="c-last" />
+                <col class="c-avg" />
+                <col class="c-ret group-sep" />
+                <col class="c-liq" />
+                <col class="c-buf group-sep" />
+                <!-- Lookbacks injected dynamically -->
+              </colgroup>
+              <thead id="thead"></thead>
+              <tbody id="tbody">
+                <tr><td class="coin">Loading…</td><td class="muted" colspan="99">Connecting to Hyperliquid…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- CHART -->
+        <div class="panel panel-chart" id="panelChart">
+          <div class="chart-head">
+            <div id="chartTitle" class="muted">BTC · 24h</div>
+            <div id="chartAxis" class="muted">—</div>
+          </div>
+          <canvas id="chart" width="800" height="300"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Fixed footer (pinned to viewport, shares gutters with main container) -->
+  <div class="footer" aria-hidden="false">
+    <div class="inner">
+      <div id="clock">—</div>
+      <div class="hint">
+        <span id="hintSwitch"><span class="kbd">↑/↓</span> switch coin</span>
+        <span><span class="kbd">c</span> show/hide chart</span>
+        <span><span class="kbd">e</span> edit coins</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right-click context menu -->
+  <div id="ctxMenu" class="ctxmenu" style="display:none"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ---------- CONFIG ---------- */
+  const LOWPOWER = true;
+  const DPR_MAX = Math.min(2, window.devicePixelRatio || 1);
+  const RENDER_MIN_INTERVAL = LOWPOWER ? 250 : 150;
+
+  const WS_URL = "wss://api.hyperliquid.xyz/ws";
+  const INFO_URL = "https://api.hyperliquid.xyz/info";
+
+  let SYMBOLS = ["BTC","ETH","SOL","HYPE"];
+
+  const LOOKBACKS = [
+    ["5m",5*60],["30m",30*60],["1h",60*60],["3h",3*60*60],
+    ["24h",24*60*60],["7d",7*24*60*60],["30d",30*24*60*60],
+  ];
+  const INTERVAL_FOR_LOOKBACK = {"5m":"1m","30m":"1m","1h":"5m","3h":"5m","24h":"15m","7d":"1h","30d":"4h"};
+
+  const BASELINE_REFRESH_SECONDS = LOWPOWER ? 120 : 60;
+  const USE_BASELINE_INTERPOLATION = false;
+
+  const SHOW_MY_AVG = true;
+  let MY_AVG_PRICE = {"BTC":108_834.20,"SOL":195.96,"HYPE":43.089};
+  const MY_AVG_FORMAT = null;
+
+  const SHOW_LIQ = true;
+  let MY_LIQ_PRICE = {"BTC":96_503.75,"SOL":151.05,"HYPE":34.312};
+  const BUF_COLORIZE = false;
+
+  const SHOW_TIMESTAMP = true;
+  const STRIP_LEADING_ZERO = true;
+
+  let SHOW_CHART = true;
+  const CHART_INTERVAL = "1m";
+  const CHART_REFRESH_SECONDS = 30;
+
+  const DEFAULT_NUM_FORMAT = ",.2f";
+  let SYMBOL_FORMAT = {"BTC":",.0f","ETH":",.2f","SOL":".2f","HYPE":".3f"};
+
+  /* ---------- Persistence (localStorage) ---------- */
+  const STORAGE_KEY = 'hype_dashboard:user';
+  function loadPersisted(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(!raw) return;
+      const obj = JSON.parse(raw);
+      if(obj.symbols && Array.isArray(obj.symbols) && obj.symbols.length) SYMBOLS = obj.symbols.slice();
+      if(obj.avg && typeof obj.avg === 'object') Object.assign(MY_AVG_PRICE, obj.avg);
+      if(obj.liq && typeof obj.liq === 'object') Object.assign(MY_LIQ_PRICE, obj.liq);
+      if(obj.fmt && typeof obj.fmt === 'object') Object.assign(SYMBOL_FORMAT, obj.fmt);
+    }catch(e){ console.debug('loadPersisted failed', e); }
+  }
+  function savePersisted(){
+    try{
+      const payload = { symbols: SYMBOLS, avg: MY_AVG_PRICE, liq: MY_LIQ_PRICE, fmt: SYMBOL_FORMAT };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    }catch(e){ console.debug('savePersisted failed', e); }
+  }
+
+  const HEARTBEAT_SECONDS = 30;
+  const RECONNECT_DELAY_MS = 3000;
+  const HTTP_TIMEOUT_MS = 10000;
+
+  // Keep console quiet in prod
+  const AXIS_DEBUG = false;
+
+  const DELTA_FLASH_ENABLED = true;
+  const DELTA_FLASH_MS = 280;
+
+  /* ---------- STATE ---------- */
+  const latest_mid = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const baselines  = Object.fromEntries(SYMBOLS.map(s=>[s,{}]));
+  const last_mid_ts= Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const chart_series = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
+  const chart_times  = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
+  const hasSnapshot  = Object.fromEntries(SYMBOLS.map(s=>[s,false]));
+  const pendingLive  = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const _last_price_value = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const _flash_until = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
+  const _flash_dir   = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
+
+  let _selected_idx = 0, _last_render_time = 0, _changed = true;
+  let _hydrated = false;
+  let _lastRowPickAt = 0;
+
+  /* ---------- ELEMENTS ---------- */
+  const theadEl = document.getElementById("thead");
+  const tbodyEl = document.getElementById("tbody");
+  const clockEl = document.getElementById("clock");
+  const panelChart = document.getElementById("panelChart");
+  const chartTitle = document.getElementById("chartTitle");
+  const chartAxis  = document.getElementById("chartAxis");
+  const chart      = document.getElementById("chart");
+  const hintSwitch = document.getElementById("hintSwitch");
+  const ctx = chart.getContext("2d");
+
+  /* ---------- UTIL ---------- */
+  const nowMs = ()=>Date.now();
+  function fmtClock(){
+    const d=new Date(); let h=d.getHours();
+    const m=String(d.getMinutes()).padStart(2,"0"), s=String(d.getSeconds()).padStart(2,"0");
+    const ampm=h>=12?"PM":"AM"; h=h%12; if(h===0)h=12;
+    let hh=String(h).padStart(2,"0"); if(STRIP_LEADING_ZERO) hh=String(h);
+    return `${hh}:${m}:${s} ${ampm}`;
+  }
+  function fmtTs(ms, { seconds=false, showDate=false } = {}){
+    const d = new Date(ms);
+    let h = d.getHours();
+    const m = String(d.getMinutes()).padStart(2,"0");
+    const s = String(d.getSeconds()).padStart(2,"0");
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12; if(h === 0) h = 12;
+    let hh = STRIP_LEADING_ZERO ? String(h) : String(h).padStart(2,"0");
+    const t = seconds ? `${hh}:${m}:${s} ${ampm}` : `${hh}:${m} ${ampm}`;
+    if(!showDate) return t;
+    const md = `${d.getMonth()+1}/${d.getDate()}`;
+    return `${md} ${t}`;
+  }
+  function fmtAgeMs(ms){
+    if(ms==null) return "—"; let delta=nowMs()-ms; if(delta<0) delta=0;
+    const s=Math.floor(delta/1000); if(s<60) return `${s}s`;
+    const m=Math.floor(s/60); if(m<60) return `${m}m`;
+    return `${Math.floor(m/60)}h`;
+  }
+  function formatWithSpec(v,spec){
+    if(v==null||Number.isNaN(v))return "";
+    const useComma=spec?.includes(","); let dec=0; const dot=spec?.indexOf(".");
+    if(dot>=0){const tail=spec.slice(dot+1); const m=tail.match(/^(\d+)/); if(m) dec=parseInt(m[1],10);}
+    const opts={minimumFractionDigits:dec, maximumFractionDigits:dec};
+    return useComma?Number(v).toLocaleString(undefined,opts):Number(v).toFixed(dec);
+  }
+  const fmtMid=(sym,v)=>v==null?"":formatWithSpec(v, SYMBOL_FORMAT[sym]??DEFAULT_NUM_FORMAT);
+  const fmtAvg=(sym,avg)=>avg==null?"—":formatWithSpec(avg, (MY_AVG_FORMAT||SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT));
+  const pctChange=(nv,ov)=> (nv==null||ov==null||ov===0) ? null : (nv-ov)/ov*100;
+
+  // Epoch helper
+  const MS_EPOCH_CUTOFF = 1e12;
+  const toMs = (t) => (t < MS_EPOCH_CUTOFF ? t * 1000 : t);
+
+  /* ---------- AXIS (live-to-now window) ---------- */
+  function computeAxisRange(){
+    const now = nowMs();
+    const windowMs = 24 * 60 * 60 * 1000;
+    return [now - windowMs, now];
+  }
+  function renderAxis(){
+    const [L, R] = computeAxisRange();
+    chartAxis.textContent = `${fmtTs(L)}  —  ${fmtTs(R)}`;
+  }
+
+  /* ---------- TABLE ---------- */
+  function buildTableHeader(){
+    const colgroup = document.querySelector('table.data colgroup');
+    const lbCols = LOOKBACKS.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
+    colgroup.insertAdjacentHTML("beforeend", lbCols);
+
+    const lookbackTh = LOOKBACKS.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
+    theadEl.innerHTML = `
+      <tr>
+        <th class="h-coin">COIN</th>
+        <th class="num h-price">PRICE</th>
+        <th class="num h-last">LAST</th>
+        <th class="num h-avg">AVG</th>
+        <th class="num h-ret">RET%</th>
+        <th class="num h-liq">LIQ</th>
+        <th class="num h-buf">BUF%</th>
+        ${lookbackTh}
+      </tr>`;
+    try{ updateColumnWidths(); }catch(e){}
+  }
+
+  /* Uniform column sizing: min 14ch incl padding, grow equally */
+  function updateColumnWidths(){
+    const table = document.querySelector('table.data');
+    if(!table) return;
+
+    // visible columns
+    const ths = Array.from(table.querySelectorAll('thead th')).filter(th=>{
+      const cs = getComputedStyle(th);
+      return cs.display !== 'none';
+    });
+    const n = ths.length || 1;
+
+    // wrapper width we can use
+    const wrap = table.closest('.table-wrap') || table.parentElement || document.body;
+    const wrapW = Math.max(0, wrap.clientWidth || 0);
+
+    // measure 14ch in the table’s font
+    let ch14 = 0;
+    try{
+      const probe = document.createElement('span');
+      probe.style.position='absolute';
+      probe.style.visibility='hidden';
+      probe.style.whiteSpace='nowrap';
+      probe.style.font = getComputedStyle(table).font;
+  probe.textContent = '0'.repeat(10);
+      document.body.appendChild(probe);
+      ch14 = Math.ceil(probe.getBoundingClientRect().width);
+      document.body.removeChild(probe);
+    }catch(e){ ch14 = 120; } // fallback
+
+    const cellHPad = 16; // td/th padding-left+right (8+8)
+    const minColPx = ch14 + cellHPad;
+
+    // equal width across all columns, but never below our min
+    const equalColPx = Math.floor(wrapW / n);
+    const colPx = Math.max(minColPx, equalColPx);
+
+    table.style.setProperty('--colw', colPx + 'px');
+    table.style.minWidth = Math.ceil(minColPx * n) + 'px';
+    table.style.width = '100%';
+  }
+
+  function hydrateTable(){
+    const rows = SYMBOLS.map(sym=>{
+      const lbTds = LOOKBACKS.map(([lb],i)=>`<td class="num lb-${lb} ${i===0?'group-sep':''}">—</td>`).join("");
+      return `
+        <tr data-sym="${sym}">
+          <td class="coin"><span class="sel-dot"></span><span>${sym}</span></td>
+          <td class="num c-price"></td>
+          <td class="num c-last muted">—</td>
+          <td class="num c-avg">—</td>
+          <td class="num c-ret">—</td>
+          <td class="num c-liq">—</td>
+          <td class="num c-buf">—</td>
+          ${lbTds}
+        </tr>`;
+    }).join("");
+    tbodyEl.innerHTML = rows;
+    _hydrated = true;
+    updateSelectionDots();
+    try{ updateColumnWidths(); }catch(e){}
+    // Attach long-press handlers to the freshly created rows
+    attachLongPressHandlers();
+  }
+
+  /* ---------- LONG-PRESS (mobile) ---------- */
+  function attachLongPressHandlers(){
+    const LONGPRESS_MS = 520;
+    const MOVE_TOLERANCE = 10; // px
+
+    // Clean up any previous handlers first by replacing nodes (cheap for small table)
+    const rows = Array.from(tbodyEl.querySelectorAll('tr[data-sym]'));
+    rows.forEach(row=>{
+      // remove any existing data handlers
+      row._lp = row._lp || {};
+      // pointer state
+      let timer = null, startX = 0, startY = 0, pointed = false;
+
+      function start(e){
+        // Only enable long-press on touch/pen devices or when viewport is mobile-sized
+        const isMouse = e.pointerType === 'mouse';
+        const isMobileViewport = window.matchMedia('(max-width: 899px)').matches;
+        if(isMouse && !isMobileViewport) return;
+        pointed = true; startX = e.clientX; startY = e.clientY;
+        timer = setTimeout(()=>{
+          // open context menu for this coin; hide header and bulk formats on long-press
+          const sym = row.getAttribute('data-sym');
+          if(sym){
+            try{ openContextMenu({ clientX: startX, clientY: startY }, sym, { noHeader: true, hideFormats: true }); }catch(e){}
+          }
+          timer = null;
+        }, LONGPRESS_MS);
+      }
+
+      function move(e){ if(!pointed) return; if(Math.hypot(e.clientX - startX, e.clientY - startY) > MOVE_TOLERANCE) cancel(); }
+      function end(){ cancel(); pointed = false; }
+      function cancel(){ if(timer){ clearTimeout(timer); timer = null; } }
+
+      // Remove previous listeners if present
+      if(row._lp.cleanup){ try{ row._lp.cleanup(); }catch(e){} }
+
+      row.addEventListener('pointerdown', start, {passive:true});
+      row.addEventListener('pointermove', move, {passive:true});
+      row.addEventListener('pointerup', end, {passive:true});
+      row.addEventListener('pointercancel', end, {passive:true});
+
+      // store cleanup to remove listeners later if needed
+      row._lp.cleanup = ()=>{
+        try{ row.removeEventListener('pointerdown', start); row.removeEventListener('pointermove', move); row.removeEventListener('pointerup', end); row.removeEventListener('pointercancel', end); }catch(e){}
+      };
+    });
+  }
+
+  function updateSelectionDots(){
+    const trs = tbodyEl.querySelectorAll("tr[data-sym]");
+    trs.forEach(tr=>{
+      const sym = tr.getAttribute("data-sym");
+      tr.classList.toggle("row-selected", SHOW_CHART && sym === SYMBOLS[_selected_idx]);
+    });
+  }
+
+  function updateRow(sym){
+    const tr = tbodyEl.querySelector(`tr[data-sym="${sym}"]`);
+    if(!tr) return;
+
+    const mid = latest_mid[sym];
+    const last= last_mid_ts[sym];
+    const avg = MY_AVG_PRICE[sym];
+    const ret = pctChange(mid,(avg!=null && avg!==0)?avg:null);
+    const liq = MY_LIQ_PRICE[sym];
+    const liqTxt = (liq!=null)? formatWithSpec(liq, SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT) : "—";
+    let bufPct=null; if(mid!=null && mid!==0 && liq!=null){ bufPct=(mid-liq)/mid*100.0; }
+
+    const priceTd = tr.querySelector("td.c-price");
+    const prev = _last_price_value[sym];
+    if(DELTA_FLASH_ENABLED && prev!=null && mid!=null){
+      const dir = mid>prev?1:(mid<prev?-1:0);
+      if(dir!==0){ _flash_dir[sym]=dir; _flash_until[sym]=nowMs()+DELTA_FLASH_MS; }
+    }
+    _last_price_value[sym]=mid;
+    priceTd.textContent = fmtMid(sym, mid);
+    priceTd.classList.remove("flash-up","flash-down");
+    if(_flash_until[sym] > nowMs()){
+      priceTd.classList.add(_flash_dir[sym]>0 ? "flash-up" : (_flash_dir[sym]<0 ? "flash-down" : ""));
+    }
+
+    const lastTd = tr.querySelector("td.c-last");
+    if(lastTd) lastTd.textContent = fmtAgeMs(last);
+
+    const avgTd  = tr.querySelector("td.c-avg"); if(avgTd) avgTd.textContent = fmtAvg(sym, avg);
+    const retTd  = tr.querySelector("td.c-ret");
+    if(retTd){
+      retTd.textContent = "—";
+      retTd.classList.remove("pos","neg");
+      if(ret!=null){ retTd.textContent = ret.toFixed(2)+"%"; retTd.classList.add(ret>=0?"pos":"neg"); }
+    }
+    const liqTd  = tr.querySelector("td.c-liq"); if(liqTd) liqTd.textContent = liqTxt;
+    const bufTd  = tr.querySelector("td.c-buf");
+    if(bufTd){
+      bufTd.textContent = "—";
+      bufTd.classList.remove("pos","neg");
+      if(bufPct!=null){
+        bufTd.textContent = bufPct.toFixed(2)+"%";
+        if(BUF_COLORIZE) bufTd.classList.add(bufPct>=0?"pos":"neg");
+      }
+    }
+
+    for(const [lb,] of LOOKBACKS){
+      const td = tr.querySelector(`td.lb-${lb}`);
+      if(!td) continue;
+      const base = baselines[sym][lb];
+      const p = pctChange(mid, base);
+      td.textContent = "—";
+      td.classList.remove("pos","neg");
+      if(p!=null){ td.textContent = p.toFixed(2)+"%"; td.classList.add(p>=0?"pos":"neg"); }
+    }
+  }
+
+  function updateTable(){
+    if(!_hydrated){ hydrateTable(); }
+    updateSelectionDots();
+    SYMBOLS.forEach(updateRow);
+  }
+
+  tbodyEl?.addEventListener("click", (e)=>{
+    const now = performance.now();
+    if (now - _lastRowPickAt < 250) return;
+    _lastRowPickAt = now;
+
+    const tr = e.target.closest("tr[data-sym]");
+    if(!tr) return;
+    const idx = SYMBOLS.indexOf(tr.getAttribute("data-sym"));
+    if(idx>=0 && idx !== _selected_idx){
+      _selected_idx = idx;
+      updateSelectionDots();
+      drawChart();
+    }
+  });
+
+  /* ---------- CONTEXT MENU / BULK EDITOR ---------- */
+  function clampToCanvas(x, y, menuEl){
+    const pad = 8;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const r = { w: menuEl.offsetWidth || 220, h: menuEl.offsetHeight || 140 };
+    const nx = Math.min(Math.max(pad, x), vw - r.w - pad);
+    const ny = Math.min(Math.max(pad, y), vh - r.h - pad);
+    return {x:nx, y:ny};
+  }
+  function closeCtx(){
+    const m=document.getElementById('ctxMenu'); if(!m) return;
+  try{ if(m.__overlayClickHandler){ m.removeEventListener('click', m.__overlayClickHandler); delete m.__overlayClickHandler; } }catch(e){}
+  m.style.display='none'; m.innerHTML=''; m.className = 'ctxmenu';
+  m.style.position=''; m.style.left=''; m.style.top=''; m.style.transform=''; m.style.width='';
+  m.onclick = null;
+  document.body.classList.remove('editor-open');
+  document.removeEventListener('click', closeCtx, {capture:true});
+  }
+  function promptNumber(label, initial){
+    const v = prompt(label, initial ?? '');
+    if(v==null) return null;
+    const n = Number(String(v).replace(/[_ ,]/g,'')); 
+    return Number.isFinite(n) ? n : null;
+  }
+  function promptFormat(label, initial){
+    const v = prompt(label + " (examples: ',.0f', ',.2f', '.3f')", initial ?? '');
+    if(v==null) return null;
+    return v.trim() || null;
+  }
+  function rebuildStoresForSymbols(){
+    const makeObj = (fill=null)=>Object.fromEntries(SYMBOLS.map(s=>[s,fill]));
+    for(const k of Object.keys(latest_mid)) delete latest_mid[k];
+    for(const k of Object.keys(baselines))  delete baselines[k];
+    for(const k of Object.keys(last_mid_ts))delete last_mid_ts[k];
+    for(const k of Object.keys(chart_series))delete chart_series[k];
+    for(const k of Object.keys(chart_times)) delete chart_times[k];
+    for(const k of Object.keys(_last_price_value)) delete _last_price_value[k];
+    for(const k of Object.keys(_flash_until)) delete _flash_until[k];
+    for(const k of Object.keys(_flash_dir))   delete _flash_dir[k];
+
+    Object.assign(latest_mid, makeObj(null));
+    Object.assign(baselines,  Object.fromEntries(SYMBOLS.map(s=>[s,{}])));
+    Object.assign(last_mid_ts,makeObj(null));
+    Object.assign(chart_series,makeObj([]));
+    Object.assign(chart_times, makeObj([]));
+    Object.assign(_last_price_value, makeObj(null));
+    Object.assign(_flash_until, makeObj(0));
+    Object.assign(_flash_dir,   makeObj(0));
+
+    SYMBOLS.forEach(s=>{
+      if(!(s in MY_AVG_PRICE))  MY_AVG_PRICE[s]=null;
+      if(!(s in MY_LIQ_PRICE))  MY_LIQ_PRICE[s]=null;
+      if(!(s in SYMBOL_FORMAT)) SYMBOL_FORMAT[s]=DEFAULT_NUM_FORMAT;
+    });
+
+    _hydrated=false;
+    hydrateTable();
+    updateTable();
+    try{ updateColumnWidths(); }catch{}
+    _selected_idx = 0;
+    updateSelectionDots();
+    drawChart();
+
+    refreshAllBaselines().catch(()=>{});
+    if(SHOW_CHART) refreshAllCharts().catch(()=>{});
+  }
+  function openContextMenu(e, sym){
+    const menu = document.getElementById('ctxMenu');
+    if(!menu) return;
+    // allow callers to customize menu rendering (e.g. hide header or formats for long-press)
+    const opts = (arguments.length >= 3 && typeof arguments[2] === 'object') ? arguments[2] : {};
+
+    const headerHtml = opts.noHeader ? '' : `<div class="hdr">${sym ? 'Coin: '+sym : 'Dashboard'}</div>`;
+    const symButtons = sym ? `
+        <button data-act="avg">Edit AVG For ${sym}</button>
+        <button data-act="liq">Edit LIQ For ${sym}</button>
+        <button data-act="fmt">Set Price Format For ${sym}</button>
+        <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
+      ` : '';
+    const formatsHtml = opts.hideFormats ? '' : `<button data-act="formats">Global Set Formats…</button>`;
+
+    menu.innerHTML = `${headerHtml}${symButtons}<button data-act="list">Edit Coin List</button>
+      <button data-act="restore">Restore To Defaults</button>
+      ${formatsHtml}`;
+    menu.style.display='block';
+    document.body.classList.add('editor-open');
+    const pos = clampToCanvas(e.clientX, e.clientY, menu);
+    menu.style.left = pos.x + 'px';
+    menu.style.top  = pos.y + 'px';
+    setTimeout(()=>document.addEventListener('click', closeCtx, {capture:true, once:true}), 0);
+
+    menu.onclick = (ev)=>{
+      const a = ev.target.closest('button')?.dataset?.act;
+      if(!a) return;
+      if(a==='avg' && sym){
+        const cur = MY_AVG_PRICE[sym] ?? '';
+        const n = promptNumber(`Enter AVG for ${sym}`, cur);
+        if(n!=null){ MY_AVG_PRICE[sym]=n; updateRow(sym); }
+      }else if(a==='liq' && sym){
+        const cur = MY_LIQ_PRICE[sym] ?? '';
+        const n = promptNumber(`Enter LIQ for ${sym}`, cur);
+        if(n!=null){ MY_LIQ_PRICE[sym]=n; updateRow(sym); }
+      }else if(a==='fmt' && sym){
+        const cur = SYMBOL_FORMAT[sym] ?? DEFAULT_NUM_FORMAT;
+        const f = promptFormat(`Format for ${sym}`, cur);
+        if(f){ SYMBOL_FORMAT[sym]=f; updateRow(sym); drawChart(); }
+  }else if(a==='list'){
+        const cur = SYMBOLS.join(',');
+        const v = prompt("Comma-separated symbols (e.g. BTC,ETH,SOL,HYPE)", cur);
+        if(v!=null){
+          const next = Array.from(new Set(String(v).split(/[,\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean)));
+          if(next.length){
+            SYMBOLS = next;
+            rebuildStoresForSymbols();
+          }
+        }
+      }else if(a==='formats'){
+        const msg = "Bulk format (applies to all listed coins).\nExamples: ',.0f', ',.2f', '.3f'";
+        const f = prompt(msg, DEFAULT_NUM_FORMAT);
+        if(f){
+          SYMBOLS.forEach(s=>SYMBOL_FORMAT[s]=f);
+          updateTable(); drawChart();
+        }
+      }else if(a==='restore'){
+        const ok = confirm('Restore defaults? This will clear saved symbols, averages, liqs and formats and reload the page. Continue?');
+        if(ok){ try{ localStorage.removeItem(STORAGE_KEY); location.reload(); }catch(e){} }
+      }
+      closeCtx();
+    };
+  }
+
+  /* ---------- BULK EDITOR (synced state) ---------- */
+  let _editorOpen = false;
+
+  function openBulkEditor(){
+    _editorOpen = true;
+    const menu = document.getElementById('ctxMenu');
+    menu.className = 'ctxmenu bulk-editor';
+    menu.innerHTML = `
+      <div class="editor" role="dialog" aria-modal="true">
+        <div style="overflow:auto;">
+          <table class="editor-table">
+            <colgroup>
+              <col class="c-coin" />
+              <col class="c-avg" />
+              <col class="c-liq" />
+              <col class="c-fmt" />
+              <col class="c-del" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>COIN</th>
+                <th class="num">AVG</th>
+                <th class="num">LIQ</th>
+                <th class="num">FORMAT</th>
+                <th class="num">DEL</th>
+              </tr>
+            </thead>
+            <tbody id="editorBody"></tbody>
+          </table>
+        </div>
+        <div class="editor-footer">
+          <div class="btns">
+            <button id="editorReset" class="btn">Defaults</button>
+            <button id="editorCancel" class="btn">Cancel</button>
+            <button id="editorSave" class="btn">Save</button>
+          </div>
+        </div>
+      </div>`;
+
+    const body = document.getElementById('editorBody');
+    function renderRows(){
+      body.innerHTML = '';
+      SYMBOLS.forEach((s,idx)=>{
+        const tr = document.createElement('tr');
+        const avgVal = MY_AVG_PRICE[s] != null ? Number(MY_AVG_PRICE[s]).toLocaleString() : '';
+        const liqVal = MY_LIQ_PRICE[s] != null ? Number(MY_LIQ_PRICE[s]).toLocaleString() : '';
+        const isNew = (s === 'NEW');
+        tr.innerHTML = `
+          <td><input class="sym" data-idx="${idx}" data-field="sym" type="text" value="${isNew? '': s}" placeholder="${isNew? 'NEW COIN': ''}" /></td>
+          <td class="num"><input class="num" data-idx="${idx}" data-field="avg" type="text" value="${avgVal}" /></td>
+          <td class="num"><input class="num" data-idx="${idx}" data-field="liq" type="text" value="${liqVal}" /></td>
+          <td class="num"><input class="num" data-idx="${idx}" data-field="fmt" type="text" value="${SYMBOL_FORMAT[s] ?? ''}" /></td>
+          <td class="num">
+            <div class="editorDelWrap" data-idx="${idx}" role="button" tabindex="0" title="Delete">
+              <button data-idx="${idx}" class="editorDel" title="Delete">×</button>
+            </div>
+          </td>`;
+        body.appendChild(tr);
+      });
+      const addTr = document.createElement('tr'); addTr.className = 'editor-new-row';
+      const nextIdx = SYMBOLS.length;
+      addTr.innerHTML = `
+        <td class="add"><div id="editorAddRow" class="editorAdd" role="button" tabindex="0" title="Add">+</div></td>
+        <td class="num"><input class="num" data-idx="${nextIdx}" data-field="avg" type="text" value="" /></td>
+        <td class="num"><input class="num" data-idx="${nextIdx}" data-field="liq" type="text" value="" /></td>
+        <td class="num"><input class="num" data-idx="${nextIdx}" data-field="fmt" type="text" value="" /></td>
+        <td class="num"></td>`;
+      body.appendChild(addTr);
+    }
+    renderRows();
+
+    function adjustEditorColumnWidths(){
+      try{
+        const menu = document.getElementById('ctxMenu');
+        if(!menu) return;
+        const edTable = menu.querySelector('table.editor-table');
+        if(!edTable) return;
+
+        // helper to get main table header width by selector
+        const headerWidth = (sel)=>{
+          const th = document.querySelector(sel);
+          if(!th) return null;
+          return Math.max(0, Math.round(th.getBoundingClientRect().width));
+        };
+
+        const mapping = {
+          'c-coin': '.h-coin',
+          'c-avg' : '.h-avg',
+          'c-liq' : '.h-liq',
+          'c-fmt' : null,
+          'c-del' : null,
+        };
+
+        const cols = edTable.querySelectorAll('col');
+        cols.forEach(col=>{
+          const cls = (col.className||'').split(/\s+/).find(c=>c.startsWith('c-'));
+          if(!cls) return;
+          const sel = mapping[cls];
+          if(sel){ const w = headerWidth(sel); if(w) col.style.width = w + 'px'; else col.style.width = ''; }
+          else{
+            if(cls==='c-fmt') col.style.width = '124px';
+            else if(cls==='c-del') col.style.width = '88px';
+            else col.style.width = '';
+          }
+        });
+      }catch(e){}
+    }
+
+    menu.style.display='block';
+    menu.focus?.();
+    try{
+      if(menu.parentElement !== document.body) document.body.appendChild(menu);
+      // clear any leftover inline positioning left from context menus
+      menu.style.left = '';
+      menu.style.top = '';
+      menu.style.right = '';
+      menu.style.bottom = '';
+      menu.style.transform = '';
+      menu.style.width = '';
+      // center as a full-viewport fixed overlay
+      menu.style.position = 'fixed';
+      menu.style.inset = '0';
+      menu.style.display = 'flex';
+      menu.style.alignItems = 'center';
+      menu.style.justifyContent = 'center';
+      const wrapEl = document.querySelector('.wrap');
+      if(wrapEl){
+        const r = wrapEl.getBoundingClientRect();
+        const maxW = Math.min(920, Math.max(320, Math.floor(r.width - 40)));
+        const ed = menu.querySelector('.editor');
+        if(ed){
+          ed.style.maxWidth = maxW + 'px';
+          ed.style.width = 'auto';
+          ed.style.margin = '0 auto';
+        }
+      }
+    }catch(e){}
+
+    const onOverlayClick = (ev)=>{ if(ev.target === menu){ closeBulkEditor(); } };
+    menu.__overlayClickHandler = onOverlayClick;
+    menu.addEventListener('click', onOverlayClick);
+
+    menu.onclick = (ev)=>{
+      const add = ev.target.closest('#editorAddRow') || ev.target.closest('.editorAdd');
+      if(add){
+        SYMBOLS.push('NEW');
+        MY_AVG_PRICE['NEW'] = null; MY_LIQ_PRICE['NEW'] = null; SYMBOL_FORMAT['NEW'] = DEFAULT_NUM_FORMAT;
+        renderRows();
+        try{ adjustEditorColumnWidths(); }catch(e){}
+  const lastIdx = SYMBOLS.length-1;
+  setTimeout(()=>{ const inp = body.querySelector(`input.sym[data-idx="${lastIdx}"]`); inp?.focus(); inp?.select(); }, 10);
+        return;
+      }
+      const delBtn = ev.target.closest('.editorDel');
+      const delWrap = ev.target.closest('.editorDelWrap');
+      const el = delBtn || delWrap;
+      if(el){
+        const i = Number(el.dataset.idx); if(!Number.isNaN(i)){
+          const sym = SYMBOLS[i]; SYMBOLS.splice(i,1);
+          delete MY_AVG_PRICE[sym]; delete MY_LIQ_PRICE[sym]; delete SYMBOL_FORMAT[sym];
+          renderRows();
+          try{ adjustEditorColumnWidths(); }catch(e){}
+        }
+      }
+    };
+    document.getElementById('editorCancel').onclick = ()=>{ closeBulkEditor(); };
+    // Add Reset button handler if present
+    const resetBtn = document.getElementById('editorReset'); if(resetBtn) resetBtn.onclick = ()=>{
+      try{ localStorage.removeItem(STORAGE_KEY); location.reload(); }catch(e){}
+    };
+
+    document.getElementById('editorSave').onclick = ()=>{
+      const inputs = Array.from(body.querySelectorAll('input'));
+      const next = [];
+      const nextAvg = {};
+      const nextLiq = {};
+      const nextFmt = {};
+      const rows = new Map();
+      inputs.forEach(inp=>{
+        const idx = Number(inp.dataset.idx); const field = inp.dataset.field; let val = inp.value;
+        if(field==='avg' || field==='liq'){ const cleaned = String(val).replace(/[_,\s]/g,''); val = cleaned === '' ? '' : cleaned; }
+        if(!rows.has(idx)) rows.set(idx, {});
+        rows.get(idx)[field] = val;
+      });
+      for(const [,r] of Array.from(rows.entries()).sort((a,b)=>a[0]-b[0])){
+        const sym = (r.sym||'').trim().toUpperCase(); if(!sym) continue;
+        if(next.includes(sym)) continue;
+        next.push(sym);
+        const a = r.avg===''?null: Number(r.avg);
+        const l = r.liq===''?null: Number(r.liq);
+        const f = (r.fmt||'').trim() || DEFAULT_NUM_FORMAT;
+        if(a!=null) nextAvg[sym]=a; else nextAvg[sym]=null;
+        if(l!=null) nextLiq[sym]=l; else nextLiq[sym]=null;
+        nextFmt[sym]=f;
+      }
+
+      SYMBOLS = next.length? next : SYMBOLS;
+      for(const k of Object.keys(MY_AVG_PRICE)) delete MY_AVG_PRICE[k];
+      for(const k of Object.keys(MY_LIQ_PRICE)) delete MY_LIQ_PRICE[k];
+      for(const k of Object.keys(SYMBOL_FORMAT)) delete SYMBOL_FORMAT[k];
+      Object.assign(MY_AVG_PRICE, nextAvg);
+      Object.assign(MY_LIQ_PRICE, nextLiq);
+      Object.assign(SYMBOL_FORMAT, nextFmt);
+
+      rebuildStoresForSymbols();
+  try{ savePersisted(); }catch(e){}
+  closeBulkEditor();
+    };
+    try{ adjustEditorColumnWidths(); }catch(e){}
+    if(!window.__bulkEditorResizeAttached){ window.addEventListener('resize', adjustEditorColumnWidths); window.__bulkEditorResizeAttached = true; }
+  }
+
+  function closeBulkEditor(){
+    const m=document.getElementById('ctxMenu'); if(!m) return; 
+    try{ if(m.__overlayClickHandler){ m.removeEventListener('click', m.__overlayClickHandler); delete m.__overlayClickHandler; } }catch(e){}
+    m.style.display='none'; m.innerHTML=''; m.className='ctxmenu';
+    m.style.position=''; m.style.left=''; m.style.top=''; m.style.transform=''; m.style.width=''; m.style.inset='';
+    const ed = m.querySelector('.editor');
+    if(ed){ ed.style.margin=''; ed.style.position=''; ed.style.left=''; ed.style.transform=''; ed.style.width=''; ed.style.maxWidth=''; }
+    document.body.classList.remove('editor-open');
+    _editorOpen = false;
+  }
+
+  function toggleBulkEditor(){ if(_editorOpen) closeBulkEditor(); else openBulkEditor(); }
+
+  tbodyEl?.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openBulkEditor(); });
+  document.querySelector('.panel-table')?.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openBulkEditor(); });
+  // Open bulk editor on right-click anywhere in the document
+  document.addEventListener('contextmenu', (e)=>{
+    // if the editor is already open, default behavior for closing is handled elsewhere
+    try{ e.preventDefault(); openBulkEditor(); }catch(e){}
+  });
+
+  /* ---------- CHART ---------- */
+  function sizeCanvas(){
+    const dpr = Math.max(1, DPR_MAX);
+    const cssW = chart.clientWidth || chart.getBoundingClientRect().width;
+    const cssH = chart.clientHeight|| chart.getBoundingClientRect().height;
+    const pxW = Math.floor(cssW*dpr), pxH = Math.floor(cssH*dpr);
+    if(chart.width!==pxW) chart.width=pxW;
+    if(chart.height!==pxH) chart.height=pxH;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  function updateChartAnchors(){
+    const headerCells = Array.from(theadEl.querySelectorAll("th")).filter(th=>{
+      const cs = getComputedStyle(th);
+      return cs.display!=="none" && th.getClientRects().length>0;
+    });
+    if(headerCells.length===0) return;
+
+    const lastTh = headerCells[headerCells.length-1];
+    const lastRect = lastTh.getBoundingClientRect();
+    const lastPadR = parseFloat(getComputedStyle(lastTh).paddingRight)||8;
+
+    const chartRect = chart.getBoundingClientRect();
+    const wrap = document.querySelector('.table-wrap');
+    const scrollLeft = wrap ? wrap.scrollLeft : 0;
+    const rightDataX = lastRect.right - lastPadR + scrollLeft;
+    const padR = Math.max(0, Math.round(chartRect.right - rightDataX));
+    document.documentElement.style.setProperty("--chart-pad-r", padR+"px");
+
+    const coinTh = theadEl.querySelector(".h-coin") || headerCells[0];
+    const coinRect = coinTh.getBoundingClientRect();
+    const coinPadL = parseFloat(getComputedStyle(coinTh).paddingLeft)||8;
+    const leftDataX = coinRect.left + coinPadL + (wrap ? wrap.scrollLeft : 0);
+    const padLBase = Math.max(0, Math.round(leftDataX - chartRect.left));
+    document.documentElement.style.setProperty("--chart-pad-l-base", padLBase+"px");
+
+    const axis = document.getElementById("chartAxis");
+    if(axis){
+      axis.style.position = "absolute";
+      axis.style.right = padR+"px";
+      axis.style.top = "0";
+    }
+  }
+
+  function drawChart(){
+    if(!SHOW_CHART){
+      panelChart.style.display="none";
+      updateHints();
+      return;
+    }
+    panelChart.style.display="";
+    try{ updateChartAnchors(); }catch{}
+    updateHints();
+
+    const sym = SYMBOLS[_selected_idx];
+    const series = chart_series[sym]||[];
+    chartTitle.textContent = `${sym} · 24h`;
+
+    sizeCanvas();
+    const w = chart.clientWidth, h = chart.clientHeight;
+    ctx.clearRect(0,0,w,h);
+
+    if(!series || series.length<2){
+      ctx.fillStyle="#9fb0c0";
+      const baseFont = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--base-font-size')) || 12;
+      ctx.font = `${Math.max(10, Math.round(baseFont))}px system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif`;
+      ctx.fillText("Waiting for chart data…", 16, Math.floor(h/2));
+      renderAxis();
+      return;
+    }
+
+    const minV=Math.min(...series), maxV=Math.max(...series), cur=latest_mid[sym];
+    const spec = SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT;
+
+    const padRcss = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-r"))||16;
+    const padLbase= parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-l-base"))||100;
+    const cssNudge = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-left-nudge")) || 0;
+
+    const baseFont = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--base-font-size')) || 12;
+    ctx.font = `${Math.max(10, Math.round(baseFont))}px system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif`;
+
+    const roundPX=v=>Math.round(v);
+    const padL = Math.max(roundPX(padLbase + cssNudge), 0);
+    const padR = roundPX(padRcss);
+    const padT = 14, padB = 28;
+
+    const iw = Math.max(0, w - padL - padR);
+    const ih = Math.max(0, h - padT - padB);
+    const x = (i)=> padL + (i/(series.length-1))*iw;
+    const y = (v)=> padT + (1 - (v-minV)/Math.max(1e-9, maxV-minV))*ih;
+
+    if(cur!=null){
+      const yCur = roundPX(y(cur));
+      ctx.save();
+      ctx.setLineDash([5,4]); ctx.strokeStyle="rgba(134,185,255,.9)"; ctx.lineWidth=1;
+      const label = formatWithSpec(cur, spec) || "";
+      const labelW = Math.ceil(ctx.measureText(label).width || 0);
+      const gap = 8;
+      const startX = Math.min(w - padR - 4, padL + labelW + gap);
+      const endX = Math.max(startX + 4, w - padR);
+      if(startX < endX){ ctx.beginPath(); ctx.moveTo(startX, yCur); ctx.lineTo(endX, yCur); ctx.stroke(); }
+      ctx.restore();
+    }
+
+    ctx.fillStyle="#e6edf3"; ctx.textAlign="left"; ctx.textBaseline="middle";
+    if(maxV!=null) ctx.fillText(formatWithSpec(maxV,spec), padL, roundPX(y(maxV)));
+    if(minV!=null) ctx.fillText(formatWithSpec(minV,spec), padL, roundPX(y(minV)));
+    if(cur!=null)  ctx.fillText(formatWithSpec(cur,spec),  padL, roundPX(y(cur)));
+
+    ctx.beginPath(); ctx.moveTo(x(0), y(series[0]));
+    for(let i=1;i<series.length;i++) ctx.lineTo(x(i), y(series[i]));
+    ctx.strokeStyle="#5ca8ff"; ctx.lineWidth=1; ctx.stroke();
+
+    const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
+    grad.addColorStop(0,"rgba(134,185,255,.28)");
+    grad.addColorStop(1,"rgba(134,185,255,0)");
+    ctx.lineTo(padL+iw, padT+ih); ctx.lineTo(padL, padT+ih); ctx.closePath();
+    ctx.fillStyle=grad; ctx.fill();
+
+    renderAxis(); // live axis
+  }
+
+  /* ---------- DATA ---------- */
+  function intervalSeconds(iv){
+    if(iv.endsWith("m")) return parseInt(iv,10)*60;
+    if(iv.endsWith("h")) return parseInt(iv,10)*3600;
+    if(iv.endsWith("d")) return parseInt(iv,10)*86400;
+    if(iv.endsWith("w")) return parseInt(iv,10)*604800;
+    if(iv.endsWith("M")) return 30*86400;
+    throw new Error("Unsupported interval: "+iv);
+  }
+
+  async function postInfo(payload){
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), HTTP_TIMEOUT_MS);
+    try{
+      const res=await fetch(INFO_URL,{method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), signal:ctrl.signal, mode:"cors", credentials:"omit"});
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      return await res.json();
+    } finally{ clearTimeout(to); }
+  }
+
+  async function fetchCandles(coin, interval, startMs, endMs){
+    const payload={type:"candleSnapshot", req:{coin, interval, startTime:startMs, endTime:endMs}};
+    const data=await postInfo(payload);
+    if(Array.isArray(data)) return data;
+    if(data && typeof data==="object"){ const inner=data.data; return Array.isArray(inner)?inner:[]; }
+    return [];
+  }
+
+  async function fetchPastClose(coin, lbLabel, lbSecs){
+    const endMs=nowMs();
+    const interval=INTERVAL_FOR_LOOKBACK[lbLabel];
+    const intS=intervalSeconds(interval);
+    const want=Math.max(20, Math.min(Math.floor(lbSecs/intS)+5, 200));
+    const startMs=endMs - want*intS*1000;
+
+    const candles=await fetchCandles(coin, interval, startMs, endMs);
+    if(!candles||candles.length===0) return null;
+
+    const times=[], closes=[];
+    for(const c of candles){
+      try{
+        if(c && typeof c==="object" && !Array.isArray(c)){ times.push(+(c.t??c.startTime)); closes.push(+(c.c??c.close)); }
+        else if(Array.isArray(c)){ times.push(+c[0]); closes.push(+c[4]); }
+      }catch{}
+    }
+    const target=endMs-lbSecs*1000;
+    let idx=0; for(let i=0;i<times.length;i++){ if(times[i]<=target) idx=i; else break; }
+    return closes[idx];
+  }
+
+  async function refreshAllBaselines(){
+    await Promise.all(SYMBOLS.flatMap(sym=>LOOKBACKS.map(async([lb,secs])=>{
+      try{ baselines[sym][lb]=await fetchPastClose(sym,lb,secs); }catch{ baselines[sym][lb]??=null; }
+    })));
+    _changed=true;
+  }
+
+  async function refreshAllCharts(){
+    const endMs  = nowMs();
+    const startMs= endMs - 24*60*60*1000;
+
+    const results = await Promise.all(
+      SYMBOLS.map(sym => fetchCandles(sym, CHART_INTERVAL, startMs, endMs).catch(()=>[]))
+    );
+
+    results.forEach((data, idx) => {
+      const sym = SYMBOLS[idx];
+      const series = [], times = [];
+
+      if (Array.isArray(data)) {
+        for (const c of data) {
+          try{
+            let ts, close;
+            if (c && typeof c === "object" && !Array.isArray(c)) {
+              ts = +(c.t ?? c.startTime);
+              close = +(c.c ?? c.close);
+            } else if (Array.isArray(c)) {
+              ts = +c[0];
+              close = +c[4];
+            }
+            if (Number.isFinite(ts) && Number.isFinite(close)) {
+              times.push(toMs(ts));
+              series.push(close);
+            }
+          }catch{}
+        }
+      }
+
+      chart_series[sym] = series;
+      chart_times[sym]  = times;
+      hasSnapshot[sym] = true;
+
+      // apply any buffered live point captured before the snapshot
+      const pending = pendingLive[sym];
+      if (pending && Number.isFinite(pending.t) && Number.isFinite(pending.price)) {
+        if (times.length) {
+          times[times.length - 1]   = pending.t;
+          series[series.length - 1] = pending.price;
+        } else {
+          times.push(pending.t);
+          series.push(pending.price);
+        }
+        pendingLive[sym] = null;
+      }
+    });
+
+    _changed = true;
+    if(AXIS_DEBUG) console.debug('refreshAllCharts done', {now: nowMs(), selected: SYMBOLS[_selected_idx], hasSnapshot});
+    renderAxis(); // sync the label immediately
+  }
+
+  /* ---------- WS ---------- */
+  let ws=null, hbTimer=null, reconnTimer=null;
+  const startHeartbeat=()=>{ stopHeartbeat(); hbTimer=setInterval(()=>{ try{ws?.send(JSON.stringify({method:"ping"}));}catch{} }, HEARTBEAT_SECONDS * 1000); };
+  const stopHeartbeat =()=>{ if(hbTimer){clearInterval(hbTimer); hbTimer=null;} };
+  const scheduleReconnect=()=>{ if(reconnTimer) return; reconnTimer=setTimeout(()=>{reconnTimer=null; connectWs();}, RECONNECT_DELAY_MS); };
+
+  function connectWs(){
+    try{ ws?.close(); }catch{}
+    ws=new WebSocket(WS_URL);
+    ws.onopen=()=>{ stopHeartbeat(); ws.send(JSON.stringify({method:"subscribe", subscription:{type:"allMids"}})); startHeartbeat(); };
+    ws.onmessage=(ev)=>{
+      try{
+        const msg=JSON.parse(ev.data);
+        if(msg.channel==="allMids"){
+          const mids=(msg.data?.mids)||{}; let updated=false; const ts=nowMs();
+          for(const s of SYMBOLS){
+            const v=mids[s]; if(v==null) continue;
+            const f=Number(v); if(!Number.isFinite(f)) continue;
+            if(latest_mid[s]!==f){ latest_mid[s]=f; last_mid_ts[s]=ts; updated=true; }
+          }
+          if (updated) {
+            if (SHOW_CHART) {
+              for (const s of SYMBOLS) {
+                if (latest_mid[s] != null) updateLiveTail(s);
+              }
+            }
+            _changed = true;
+          }
+        }
+      }catch{}
+    };
+    ws.onclose=()=>{ stopHeartbeat(); scheduleReconnect(); };
+    ws.onerror=()=>{ try{ws.close();}catch{} };
+  }
+
+  function updateLiveTail(sym){
+    // If we haven't received a snapshot yet, buffer the live point and wait.
+    if(!hasSnapshot[sym]){
+      pendingLive[sym] = { t: nowMs(), price: latest_mid[sym] };
+      if(AXIS_DEBUG) console.debug('updateLiveTail buffered', {sym, t: pendingLive[sym].t, price: pendingLive[sym].price});
+      return;
+    }
+
+    let series = chart_series[sym];
+    let times  = chart_times[sym];
+    const tNow = nowMs();
+    const ivMs = intervalSeconds(CHART_INTERVAL) * 1000;
+
+    // still inside current candle window? overwrite tail; else append a new point
+    if (tNow - (times[times.length - 1] || 0) < ivMs) {
+      times[times.length - 1]   = tNow;
+      series[series.length - 1] = latest_mid[sym];
+    } else {
+      times.push(tNow);
+      series.push(latest_mid[sym]);
+    }
+
+    // keep only last 24h
+    const cutoff = tNow - 24*60*60*1000;
+    while (times.length && times[0] < cutoff) { times.shift(); series.shift(); }
+
+    renderAxis();
+  }
+
+  /* ---------- INPUT ---------- */
+  function moveSelection(delta){
+    if(!SHOW_CHART) return;
+    const n=SYMBOLS.length;
+    _selected_idx = (_selected_idx + delta + n) % n;
+    updateSelectionDots();
+    drawChart();
+  }
+  function applyChartClass(){
+    document.body.classList.toggle('chart-off', !SHOW_CHART);
+    try{ updateColumnWidths(); }catch(e){}
+    setTimeout(()=>{
+      try{
+        const wrap = document.querySelector('.table-wrap');
+        if(wrap && !SHOW_CHART){ wrap.scrollLeft = 0; }
+        updateColumnWidths(); updateChartAnchors(); drawChart();
+      }catch(e){}
+    }, 24);
+  }
+  async function toggleChart(){
+    SHOW_CHART = !SHOW_CHART;
+    applyChartClass();
+    if(SHOW_CHART){ await refreshAllCharts(); }
+    updateSelectionDots();
+    drawChart();
+  }
+  function updateHints(){ if(hintSwitch) hintSwitch.style.display = SHOW_CHART ? "" : "none"; }
+
+  // Global keyboard shortcuts
+  window.addEventListener("keydown", async (e)=>{
+    if(e.key === 'Escape'){
+      const m = document.getElementById('ctxMenu');
+      if(m && m.classList.contains('bulk-editor')){ e.preventDefault(); closeBulkEditor(); return; }
+      return;
+    }
+    const tag=(e.target?.tagName||"").toLowerCase();
+    if(tag==="input"||tag==="textarea"||e.isComposing) return;
+    if(e.key==="c"||e.key==="C"){ e.preventDefault(); await toggleChart(); return; }
+    if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
+    if(!SHOW_CHART) return;
+    if(e.key==="ArrowUp"){ e.preventDefault(); moveSelection(-1); }
+    else if(e.key==="ArrowDown"){ e.preventDefault(); moveSelection(+1); }
+  }, {capture:true});
+
+  /* Resize + table scroll keep chart anchored to table */
+  window.addEventListener("resize", ()=>{ updateColumnWidths(); updateChartAnchors(); drawChart(); });
+  const _tblWrap = document.querySelector('.table-wrap');
+
+  // rAF-throttled horizontal scroll updates
+  let _scrollRaf = null;
+  _tblWrap?.addEventListener('scroll', ()=>{
+    if (_scrollRaf) return;
+    _scrollRaf = requestAnimationFrame(()=>{
+      _scrollRaf = null;
+      updateChartAnchors();
+      drawChart();
+    });
+  }, {passive:true});
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      renderAxis();
+      drawChart();
+    }
+  });
+  window.addEventListener('focus', () => {
+    renderAxis();
+    drawChart();
+  });
+
+  /* ---------- LIGHT PER-SECOND UPDATES ---------- */
+  function tickAxis(){
+    try{ if(clockEl) clockEl.textContent = fmtClock(); }catch(e){}
+    if(!SHOW_CHART) return;
+    renderAxis();
+  }
+  setInterval(tickAxis, 1000);
+
+  /* ---------- RENDER LOOP ---------- */
+  function renderIfDue(){
+    const now=nowMs();
+    if(now-_last_render_time<RENDER_MIN_INTERVAL && !_changed) return;
+    _last_render_time=now; _changed=false;
+    updateTable();
+    updateChartAnchors();
+    drawChart();
+  }
+  setInterval(renderIfDue, LOWPOWER?250:120);
+
+  /* ---------- MAIN ---------- */
+  async function main(){
+  try{ loadPersisted(); }catch(e){}
+  buildTableHeader();
+    hydrateTable();
+    connectWs();
+    try{ await refreshAllBaselines(); }catch{}
+    if(SHOW_CHART){ try{ await refreshAllCharts(); }catch{} }
+    updateHints();
+    applyChartClass();
+    renderIfDue();
+
+    setInterval(async()=>{ try{ await refreshAllBaselines(); _changed=true; }catch{} }, BASELINE_REFRESH_SECONDS*1000);
+    setInterval(async()=>{ try{ if(SHOW_CHART){ await refreshAllCharts(); _changed=true; } }catch{} }, CHART_REFRESH_SECONDS*1000);
+  }
+  main();
+})();
+</script>
+</body>
+</html>
