@@ -404,7 +404,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       <div class="hint">
         <span id="hintSwitch"><span class="kbd">↑/↓</span> switch coin</span>
         <span><span class="kbd">c</span> show/hide chart</span>
-        <span><span class="kbd">e</span> edit coins</span>
+  <span><span class="kbd">v</span> toggle line/candle</span>
+  <span><span class="kbd">e</span> edit coins</span>
       </div>
     </div>
   </div>
@@ -436,7 +437,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const USE_BASELINE_INTERPOLATION = false;
 
   const SHOW_MY_AVG = true;
-  let MY_AVG_PRICE = {"HYPE":43.795};
+  let MY_AVG_PRICE = {"ETH":3504.97,"SOL":186.44,"HYPE":43.795};
   const MY_AVG_FORMAT = null;
 
   const SHOW_LIQ = true;
@@ -448,6 +449,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
   let SHOW_CHART = true;
   const CHART_INTERVAL = "1m";
+  // Chart display mode: 'line' or 'candle'
+  let CHART_MODE = 'line';
+  // When in candle mode, use 1 hour candles (24h window -> 24 candles)
+  const CHART_CANDLE_INTERVAL = '1h';
   const CHART_REFRESH_SECONDS = 30;
 
   const DEFAULT_NUM_FORMAT = ",.2f";
@@ -489,6 +494,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const last_mid_ts= Object.fromEntries(SYMBOLS.map(s=>[s,null]));
   const chart_series = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
   const chart_times  = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
+  const chart_candles = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
   const hasSnapshot  = Object.fromEntries(SYMBOLS.map(s=>[s,false]));
   const pendingLive  = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
   const _last_price_value = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
@@ -1257,15 +1263,47 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(minV!=null) ctx.fillText(formatWithSpec(minV,spec), padL, roundPX(y(minV)));
     if(cur!=null)  ctx.fillText(formatWithSpec(cur,spec),  padL, roundPX(y(cur)));
 
-    ctx.beginPath(); ctx.moveTo(x(0), y(series[0]));
-    for(let i=1;i<series.length;i++) ctx.lineTo(x(i), y(series[i]));
-    ctx.strokeStyle="#5ca8ff"; ctx.lineWidth=1; ctx.stroke();
+    if(CHART_MODE === 'candle'){
+      // draw candles from chart_candles[sym]
+      const candles = chart_candles[sym] || [];
+      const n = candles.length;
+      if(n>0){
+        const candleW = Math.max(2, Math.min(24, Math.floor(iw / Math.max(6, n) * 0.7)));
+        for(let i=0;i<n;i++){
+          const c = candles[i];
+          const cx = padL + (i/(n-1 || 1))*iw;
+          const ox = cx; // center x
+          const openY = y(c.o);
+          const closeY = y(c.c);
+          const highY = y(c.h);
+          const lowY = y(c.l);
+          const isUp = c.c >= c.o;
+          ctx.strokeStyle = isUp ? 'rgba(22,199,132,0.9)' : 'rgba(234,57,67,0.9)';
+          ctx.fillStyle = isUp ? 'rgba(22,199,132,0.18)' : 'rgba(234,57,67,0.18)';
+          ctx.lineWidth = 1;
+          // wick
+          ctx.beginPath(); ctx.moveTo(ox, highY); ctx.lineTo(ox, lowY); ctx.stroke();
+          // body
+          const bw = candleW;
+          const bx = Math.round(ox - bw/2);
+          const by = Math.round(Math.min(openY, closeY));
+          const bh = Math.max(1, Math.round(Math.abs(closeY - openY)));
+          ctx.fillRect(bx, by, bw, bh);
+          ctx.strokeRect(bx+0.5, by+0.5, bw-1, bh-1);
+        }
+      }
+    } else {
+      // line mode
+      ctx.beginPath(); ctx.moveTo(x(0), y(series[0]));
+      for(let i=1;i<series.length;i++) ctx.lineTo(x(i), y(series[i]));
+      ctx.strokeStyle="#5ca8ff"; ctx.lineWidth=1; ctx.stroke();
 
-    const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
-    grad.addColorStop(0,"rgba(134,185,255,.28)");
-    grad.addColorStop(1,"rgba(134,185,255,0)");
-    ctx.lineTo(padL+iw, padT+ih); ctx.lineTo(padL, padT+ih); ctx.closePath();
-    ctx.fillStyle=grad; ctx.fill();
+      const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
+      grad.addColorStop(0,"rgba(134,185,255,.28)");
+      grad.addColorStop(1,"rgba(134,185,255,0)");
+      ctx.lineTo(padL+iw, padT+ih); ctx.lineTo(padL, padT+ih); ctx.closePath();
+      ctx.fillStyle=grad; ctx.fill();
+    }
 
     renderAxis(); // live axis
   }
@@ -1278,6 +1316,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(iv.endsWith("w")) return parseInt(iv,10)*604800;
     if(iv.endsWith("M")) return 30*86400;
     throw new Error("Unsupported interval: "+iv);
+  }
+
+  function getChartInterval(){
+    return CHART_MODE === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
   }
 
   async function postInfo(payload){
@@ -1330,28 +1372,36 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const endMs  = nowMs();
     const startMs= endMs - 24*60*60*1000;
 
+    const interval = getChartInterval();
     const results = await Promise.all(
-      SYMBOLS.map(sym => fetchCandles(sym, CHART_INTERVAL, startMs, endMs).catch(()=>[]))
+      SYMBOLS.map(sym => fetchCandles(sym, interval, startMs, endMs).catch(()=>[]))
     );
 
     results.forEach((data, idx) => {
       const sym = SYMBOLS[idx];
+      // For line mode we populate series/times (close prices). For candle mode
+      // we populate chart_candles with {t,o,h,l,c} objects.
       const series = [], times = [];
+      const candles = [];
 
       if (Array.isArray(data)) {
         for (const c of data) {
           try{
-            let ts, close;
+            let ts, open, high, low, close;
             if (c && typeof c === "object" && !Array.isArray(c)) {
-              ts = +(c.t ?? c.startTime);
-              close = +(c.c ?? c.close);
+              ts = +(c.t ?? c.startTime ?? c[0]);
+              open = +(c.o ?? c.open ?? c[1]);
+              high = +(c.h ?? c.high ?? c[2]);
+              low  = +(c.l ?? c.low ?? c[3]);
+              close= +(c.c ?? c.close ?? c[4]);
             } else if (Array.isArray(c)) {
-              ts = +c[0];
-              close = +c[4];
+              ts = +c[0]; open = +c[1]; high = +c[2]; low = +c[3]; close = +c[4];
             }
-            if (Number.isFinite(ts) && Number.isFinite(close)) {
-              times.push(toMs(ts));
+            if (Number.isFinite(ts)) {
+              const tms = toMs(ts);
+              times.push(tms);
               series.push(close);
+              candles.push({ t: tms, o: open, h: high, l: low, c: close });
             }
           }catch{}
         }
@@ -1359,17 +1409,25 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
       chart_series[sym] = series;
       chart_times[sym]  = times;
+      chart_candles[sym] = candles;
       hasSnapshot[sym] = true;
 
       // apply any buffered live point captured before the snapshot
       const pending = pendingLive[sym];
       if (pending && Number.isFinite(pending.t) && Number.isFinite(pending.price)) {
-        if (times.length) {
-          times[times.length - 1]   = pending.t;
-          series[series.length - 1] = pending.price;
-        } else {
-          times.push(pending.t);
-          series.push(pending.price);
+        if (getChartInterval().endsWith('m') || getChartInterval().endsWith('h') || getChartInterval().endsWith('d')){
+          // For both modes, update the last entry with the pending live point
+          if (times.length) {
+            times[times.length - 1]   = pending.t;
+            series[series.length - 1] = pending.price;
+            // also adjust candle close/high/low if present
+            const lastC = chart_candles[sym] && chart_candles[sym][chart_candles[sym].length-1];
+            if(lastC){ lastC.t = pending.t; lastC.c = pending.price; lastC.h = Math.max(lastC.h, pending.price); lastC.l = Math.min(lastC.l, pending.price); }
+          } else {
+            times.push(pending.t);
+            series.push(pending.price);
+            chart_candles[sym].push({ t: pending.t, o: pending.price, h: pending.price, l: pending.price, c: pending.price });
+          }
         }
         pendingLive[sym] = null;
       }
@@ -1423,23 +1481,57 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       return;
     }
 
-    let series = chart_series[sym];
-    let times  = chart_times[sym];
     const tNow = nowMs();
-    const ivMs = intervalSeconds(CHART_INTERVAL) * 1000;
+    const interval = getChartInterval();
+    const ivMs = intervalSeconds(interval) * 1000;
 
-    // still inside current candle window? overwrite tail; else append a new point
-    if (tNow - (times[times.length - 1] || 0) < ivMs) {
-      times[times.length - 1]   = tNow;
-      series[series.length - 1] = latest_mid[sym];
+    if (CHART_MODE === 'candle'){
+      // update candles array
+      const candles = chart_candles[sym] || [];
+      if(!candles.length || (tNow - (candles[candles.length-1].t || 0) >= ivMs)){
+        // start new candle
+        candles.push({ t: tNow, o: latest_mid[sym], h: latest_mid[sym], l: latest_mid[sym], c: latest_mid[sym] });
+      } else {
+        const last = candles[candles.length-1];
+        last.t = tNow;
+        last.c = latest_mid[sym];
+        if(latest_mid[sym] > last.h) last.h = latest_mid[sym];
+        if(latest_mid[sym] < last.l) last.l = latest_mid[sym];
+      }
+      // trim to 24h
+      const cutoff = tNow - 24*60*60*1000;
+      while(candles.length && candles[0].t < cutoff) candles.shift();
+      chart_candles[sym] = candles;
+
+      // also keep series/times for compatibility (use close prices)
+      const times = chart_times[sym] || [];
+      const series = chart_series[sym] || [];
+      if(!times.length || (tNow - (times[times.length-1]||0) >= ivMs)){
+        times.push(tNow); series.push(latest_mid[sym]);
+      } else {
+        times[times.length-1] = tNow; series[series.length-1] = latest_mid[sym];
+      }
+      // trim
+      while(times.length && times[0] < cutoff){ times.shift(); series.shift(); }
+      chart_times[sym]=times; chart_series[sym]=series;
     } else {
-      times.push(tNow);
-      series.push(latest_mid[sym]);
-    }
+      // line mode: same as before but use current interval
+      let series = chart_series[sym];
+      let times  = chart_times[sym];
+      if(!series) series = chart_series[sym]=[];
+      if(!times)  times  = chart_times[sym]=[];
+      if (tNow - (times[times.length - 1] || 0) < ivMs) {
+        times[times.length - 1]   = tNow;
+        series[series.length - 1] = latest_mid[sym];
+      } else {
+        times.push(tNow);
+        series.push(latest_mid[sym]);
+      }
 
-    // keep only last 24h
-    const cutoff = tNow - 24*60*60*1000;
-    while (times.length && times[0] < cutoff) { times.shift(); series.shift(); }
+      // keep only last 24h
+      const cutoff = tNow - 24*60*60*1000;
+      while (times.length && times[0] < cutoff) { times.shift(); series.shift(); }
+    }
 
     renderAxis();
   }
@@ -1483,6 +1575,13 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(tag==="input"||tag==="textarea"||e.isComposing) return;
     if(e.key==="c"||e.key==="C"){ e.preventDefault(); await toggleChart(); return; }
     if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
+    if(e.key==="v"||e.key==="V"){ e.preventDefault();
+      // toggle between line and candle modes
+      CHART_MODE = (CHART_MODE === 'line') ? 'candle' : 'line';
+      // refresh chart data using appropriate interval
+      try{ if(SHOW_CHART){ await refreshAllCharts(); _changed=true; drawChart(); } }catch(e){}
+      return;
+    }
     if(!SHOW_CHART) return;
     if(e.key==="ArrowUp"){ e.preventDefault(); moveSelection(-1); }
     else if(e.key==="ArrowDown"){ e.preventDefault(); moveSelection(+1); }
