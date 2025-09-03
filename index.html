@@ -232,7 +232,10 @@
   #chartLegend .legend-prev{ margin-left:0; margin-right:1px; }
   #chartLegend .legend-period{ padding:4px 8px; border-radius:6px; background:transparent; color:var(--muted); font-weight:400; margin:0 6px; }
   /* individual period items inside the periods subsection */
-  #chartLegend .legend-period-item{ padding:6px 10px; border-radius:6px; background:transparent; color:var(--muted); margin:0 6px; display:inline-flex; align-items:center; justify-content:center; min-width:0; }
+  /* use a small ch-based component so the bubble grows slightly with text length
+    while keeping a stable base padding. This avoids 3-char labels like "24h"
+    feeling too tight compared to 2-char labels. */
+  #chartLegend .legend-period-item{ padding:6px calc(10px + 0.6ch); border-radius:9px; background:transparent; color:var(--muted); margin:0 6px; display:inline-flex; align-items:center; justify-content:center; min-width:0; }
   #chartLegend .legend-period-item{ transition: box-shadow .12s ease, background-color .12s ease; border:1px solid transparent; box-sizing:border-box; }
   #chartLegend .legend-period-item.selected{ background:rgba(255,255,255,.04); color:var(--fg); font-weight:400; border:1px solid var(--border); }
   #chartLegend .legend-period-item:focus{ outline:none; box-shadow:0 0 0 3px rgba(92,168,255,.06); border-color:var(--accent-2); }
@@ -982,7 +985,24 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const pos = clampToCanvas(e.clientX, e.clientY, menu);
     menu.style.left = pos.x + 'px';
     menu.style.top  = pos.y + 'px';
-    setTimeout(()=>document.addEventListener('click', closeCtx, {capture:true, once:true}), 0);
+    // Install a capture-phase click handler that only closes the menu when the
+    // click is outside the menu. This avoids closing the menu before menu
+    // button handlers run on touch devices (capture runs before target handlers).
+    const overlayHandler = function overlayHandler(ev){
+      try{
+        // if click is inside the menu, re-install the outside-click listener for next time
+        if(menu.contains(ev.target)){
+          // re-arm for the next click outside
+          setTimeout(()=>document.addEventListener('click', overlayHandler, {capture:true, once:true}), 0);
+          return;
+        }
+      }catch(e){}
+      // else it's outside - close
+      try{ closeCtx(); }catch(e){}
+    };
+    // store so closeCtx can remove if needed
+    menu.__overlayClickHandler = overlayHandler;
+    setTimeout(()=>document.addEventListener('click', overlayHandler, {capture:true, once:true}), 0);
 
     menu.onclick = (ev)=>{
       const a = ev.target.closest('button')?.dataset?.act;
@@ -991,14 +1011,17 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         const cur = MY_AVG_PRICE[sym] ?? '';
         const n = promptNumber(`Enter AVG for ${sym}`, cur);
         if(n!=null){ MY_AVG_PRICE[sym]=n; updateRow(sym); }
+        try{ savePersisted(); }catch(e){}
       }else if(a==='liq' && sym){
         const cur = MY_LIQ_PRICE[sym] ?? '';
         const n = promptNumber(`Enter LIQ for ${sym}`, cur);
         if(n!=null){ MY_LIQ_PRICE[sym]=n; updateRow(sym); }
+        try{ savePersisted(); }catch(e){}
       }else if(a==='fmt' && sym){
         const cur = SYMBOL_FORMAT[sym] ?? DEFAULT_NUM_FORMAT;
         const f = promptFormat(`Format for ${sym}`, cur);
         if(f){ SYMBOL_FORMAT[sym]=f; updateRow(sym); drawChart(); }
+        try{ savePersisted(); }catch(e){}
   }else if(a==='list'){
         const cur = SYMBOLS.join(',');
         const v = prompt("Comma-separated symbols (e.g. BTC,ETH,SOL,HYPE)", cur);
@@ -1007,6 +1030,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           if(next.length){
             SYMBOLS = next;
             rebuildStoresForSymbols();
+            try{ savePersisted(); }catch(e){}
           }
         }
       }else if(a==='formats'){
@@ -1015,6 +1039,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         if(f){
           SYMBOLS.forEach(s=>SYMBOL_FORMAT[s]=f);
           updateTable(); drawChart();
+          try{ savePersisted(); }catch(e){}
         }
       }else if(a==='restore'){
         const ok = confirm('Restore defaults? This will clear saved symbols, averages, liqs and formats and reload the page. Continue?');
