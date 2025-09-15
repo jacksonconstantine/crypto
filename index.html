@@ -182,9 +182,7 @@
     opacity:0; transition: opacity .06s linear;
   }
   #chartGuide.visible{ opacity:1; }
-  #chartGuide .dbg-center{
-    position:absolute; left:50%; transform:translateX(-50%); width:6px; height:6px; margin-top:-3px; background:rgba(0,122,255,0.9); border-radius:2px; top:50%;
-  }
+
 
   /* Tooltip styles for chart hover */
   #chartTooltip{
@@ -504,7 +502,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           <!-- Overlay canvas kept for other debug drawings -->
           <canvas id="chartOverlay" width="800" height="300" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
           <!-- DOM vertical guide for hover (positioned using cached canvas coords to avoid raster alignment issues) -->
-          <div id="chartGuide" aria-hidden="true"><div class="dbg-center"></div></div>
+          <div id="chartGuide" aria-hidden="true"></div>
           <!-- Tooltip for chart hover -->
           <div id="chartTooltip" role="status" aria-hidden="true" style="display:none"></div>
           <div class="loading-overlay" aria-hidden="true">
