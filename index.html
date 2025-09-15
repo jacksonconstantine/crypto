@@ -171,6 +171,42 @@
   .panel-chart .loading-overlay .label{ font-size:calc(var(--base-font-size) - 1px); color:var(--muted); }
   @keyframes spin{ to{ transform:rotate(360deg); } }
 
+  /* DOM-based vertical guide (replaces canvas-drawn guide for pixel-exact positioning) */
+  #chartGuide{
+    position:absolute;
+    top:0; left:0;
+    width:1px; pointer-events:none; z-index:50;
+    background: rgba(255,255,255,0.14);
+    transform: translateX(-0.5px);
+    will-change: left, top, height, opacity;
+    opacity:0; transition: opacity .06s linear;
+  }
+  #chartGuide.visible{ opacity:1; }
+  #chartGuide .dbg-center{
+    position:absolute; left:50%; transform:translateX(-50%); width:6px; height:6px; margin-top:-3px; background:rgba(0,122,255,0.9); border-radius:2px; top:50%;
+  }
+
+  /* Tooltip styles for chart hover */
+  #chartTooltip{
+    position: fixed;
+    pointer-events: none;
+    background: rgba(12,16,20,0.95);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: calc(var(--base-font-size) - 1px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    white-space: nowrap;
+    z-index: 60;
+    transform-origin: left top;
+    transition: opacity .12s ease, transform .12s ease;
+    opacity: 0; transform: translateY(-6px) scale(.98);
+  }
+  #chartTooltip.visible{ display:block; opacity:1; transform: translateY(0) scale(1); }
+  #chartTooltip .tt-line{ color:var(--muted); display:block; margin-bottom:4px; }
+  #chartTooltip .tt-price{ font-weight:600; display:block; }
+
   /* Smoothen table and price transitions to avoid abrupt jumps */
   td.c-price{ transition: color .18s ease, opacity .12s ease, background-color .28s ease; }
 
@@ -454,7 +490,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         </div>
 
         <!-- CHART -->
-        <div class="panel panel-chart" id="panelChart">
+    <div class="panel panel-chart" id="panelChart" style="position:relative;">
     <div class="chart-head">
             <!-- Legend split into 4 even subsections: token | periods/span | granularity | date/time axis -->
             <div id="chartLegend" class="muted">
@@ -465,6 +501,12 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
             </div>
           </div>
           <canvas id="chart" width="800" height="300"></canvas>
+          <!-- Overlay canvas kept for other debug drawings -->
+          <canvas id="chartOverlay" width="800" height="300" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
+          <!-- DOM vertical guide for hover (positioned using cached canvas coords to avoid raster alignment issues) -->
+          <div id="chartGuide" aria-hidden="true"><div class="dbg-center"></div></div>
+          <!-- Tooltip for chart hover -->
+          <div id="chartTooltip" role="status" aria-hidden="true" style="display:none"></div>
           <div class="loading-overlay" aria-hidden="true">
             <div class="spinner" role="img" aria-hidden="true"></div>
             <div class="label">Loading chart…</div>
@@ -613,6 +655,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const chart      = document.getElementById("chart");
   const hintSwitch = document.getElementById("hintSwitch");
   const ctx = chart.getContext("2d");
+  const overlay = document.getElementById('chartOverlay');
+  const overlayCtx = overlay ? overlay.getContext('2d') : null;
+  // Debug toggle: press 'd' to toggle visual debug markers on the overlay
+  let CHART_DEBUG = false;
 
   // Overlay helpers for immediate UI feedback when changing periods/mode
   function getChartOverlay(){ return document.querySelector('.panel-chart .loading-overlay'); }
@@ -1291,7 +1337,316 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(chart.width!==pxW) chart.width=pxW;
     if(chart.height!==pxH) chart.height=pxH;
     ctx.setTransform(dpr,0,0,dpr,0,0);
+    // overlay matches chart size and uses same device pixel scale
+    if(overlay){
+      if(overlay.width !== pxW) overlay.width = pxW;
+      if(overlay.height !== pxH) overlay.height = pxH;
+      overlay.style.width = cssW + 'px'; overlay.style.height = cssH + 'px';
+      overlayCtx && overlayCtx.setTransform(dpr,0,0,dpr,0,0);
+    }
   }
+
+  function clearOverlay(){ if(!overlayCtx) return; overlayCtx.clearRect(0,0,overlay.width||0, overlay.height||0); }
+
+  // DOM-based chart guide helpers
+  const chartGuideEl = document.getElementById('chartGuide');
+  function showChartGuide(){ if(!chartGuideEl) return; chartGuideEl.classList.add('visible'); }
+  function hideChartGuide(){ if(!chartGuideEl) return; chartGuideEl.classList.remove('visible'); }
+  function positionChartGuideByCssX(cssX, padT, ih){
+    if(!chartGuideEl) return;
+    const rect = chart.getBoundingClientRect();
+    const parentRect = panelChart.getBoundingClientRect();
+    // cssX is canvas-relative CSS pixels (0..canvas.width).
+    // Compute coordinates relative to the positioned parent (.panel-chart)
+    const leftRel = (rect.left - parentRect.left) + cssX;
+    const topRel = (rect.top - parentRect.top) + padT;
+    const height = Math.max(0, ih);
+    chartGuideEl.style.left = Math.round(leftRel) + 'px';
+    chartGuideEl.style.top = Math.round(topRel) + 'px';
+    chartGuideEl.style.height = Math.round(height) + 'px';
+    showChartGuide();
+  }
+
+  // When debugging, draw small markers on the main chart context so we can visually
+  // compare where the main chart actually rendered shapes versus the overlay markers.
+  function drawMainDebugMarkers(){
+    if(!CHART_DEBUG) return;
+    try{
+      if(!ctx || !cachedXs || !cachedTopYs) return;
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,0,0,0.9)';
+      const n = Math.min(cachedXs.length, cachedTopYs.length);
+      for(let i=0;i<n;i++){
+        const dx = cachedXs[i]; const dy = cachedTopYs[i];
+        ctx.beginPath(); ctx.arc(dx, dy, 2, 0, Math.PI*2); ctx.fill();
+      }
+      ctx.restore();
+    }catch(e){}
+  }
+
+  /* ---------- TOOLTIP HOOKS ---------- */
+  const tooltipEl = document.getElementById('chartTooltip');
+  // hoverIndex: currently hovered data index for drawing guide line
+  let hoverIndex = null;
+
+  function showTooltip(html, clientX, clientY, anchorType='cursor', anchorTopY=null){
+    if(!tooltipEl) return;
+    tooltipEl.innerHTML = html;
+    tooltipEl.style.display = 'block';
+    tooltipEl.classList.add('visible');
+    tooltipEl.setAttribute('aria-hidden','false');
+    positionTooltip(clientX, clientY, anchorType, anchorTopY);
+  }
+  function hideTooltip(){ if(!tooltipEl) return; tooltipEl.classList.remove('visible'); tooltipEl.setAttribute('aria-hidden','true'); setTimeout(()=>{ if(tooltipEl) tooltipEl.style.display='none'; }, 120); }
+
+  function positionTooltip(pageX, pageY, anchorType, anchorTopY=null){
+    if(!tooltipEl) return;
+    const pad = 8;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const ttW = tooltipEl.offsetWidth, ttH = tooltipEl.offsetHeight;
+    let left, top;
+    if(anchorType === 'point'){
+      // center horizontally above the point
+      left = pageX - Math.round(ttW/2);
+      // If an anchorTopY (topmost drawn pixel for point) is supplied, place tooltip bottom a few pixels above it
+      if(anchorTopY != null){
+        top = anchorTopY - ttH - 8; // 8px gap above the topmost visual element
+      } else {
+        top  = pageY - ttH - 12;
+      }
+    } else {
+      // cursor-style: offset to the right and above the cursor
+      left = pageX + 12;
+      top  = pageY - ttH - 12;
+    }
+    // clamp to viewport
+    if(left + ttW + pad > vw) left = Math.max(pad, vw - ttW - pad);
+    if(left < pad) left = pad;
+    if(top < pad) top = pageY + 12; // if going off top, put below the anchor
+    if(top + ttH + pad > vh) top = Math.max(pad, vh - ttH - pad);
+    tooltipEl.style.left = Math.round(left) + 'px';
+    tooltipEl.style.top  = Math.round(top) + 'px';
+  }
+
+  function canvasToDataCoord(clientX, clientY){
+    const rect = chart.getBoundingClientRect();
+    const cssX = clientX - rect.left; const cssY = clientY - rect.top;
+    const w = chart.clientWidth, h = chart.clientHeight;
+    const padRcss = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-r"))||16;
+    const padLbase= parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-l-base"))||100;
+    const cssNudge = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-left-nudge")) || 0;
+    const padL = Math.max(Math.round(padLbase + cssNudge), 0);
+    const padR = Math.round(padRcss);
+    const padT = 14, padB = 28;
+    const iw = Math.max(0, w - padL - padR);
+    const ih = Math.max(0, h - padT - padB);
+    return { cssX, cssY, padL, padT, iw, ih, w, h };
+  }
+
+  function findNearestPoint(clientX, clientY){
+    const sym = SYMBOLS[_selected_idx];
+    const series = chart_series[sym]||[];
+    const times = chart_times[sym]||[];
+    const c = canvasToDataCoord(clientX, clientY);
+    const { cssX, padL, iw } = c;
+    const n = series.length;
+    if(n===0) return null;
+    const xToIndex = (x)=>{
+      const rel = (x - padL) / (n>1 ? iw : 1);
+      const idx = Math.round(rel * (n-1));
+      return Math.max(0, Math.min(n-1, idx));
+    };
+    const idx = xToIndex(cssX);
+    const rect = chart.getBoundingClientRect();
+    // If we cached pixel coords during drawChart, prefer them to avoid tiny rounding mismatches
+    if(cachedXs && cachedXs.length === n && cachedTopYs && cachedTopYs.length === n){
+      const clientDataX = Math.round(rect.left + cachedXs[idx]);
+      const clientDataY = Math.round(rect.top + cachedTopYs[idx]);
+      const clientTopY = clientDataY;
+      return { idx, price: series[idx], time: times[idx], clientX: clientDataX, clientY: clientDataY, clientTopY };
+    }
+    // fallback
+    const dataX = padL + (n>1 ? (idx/(n-1))*iw : iw/2);
+    const dataY = c.padT + (1 - (series[idx]-minV_global)/Math.max(1e-9, maxV_global-minV_global))*c.ih;
+    const clientDataX = Math.round(rect.left + dataX);
+    const clientDataY = Math.round(rect.top + dataY);
+    const clientTopY = clientDataY;
+    return { idx, price: series[idx], time: times[idx], clientX: clientDataX, clientY: clientDataY, clientTopY };
+  }
+
+  function hitTestCandle(clientX, clientY){
+    const sym = SYMBOLS[_selected_idx];
+    const candles = chart_candles[sym]||[];
+    const c = canvasToDataCoord(clientX, clientY);
+    const { cssX, cssY, padL, padT, iw, ih, w, h } = c;
+    const n = candles.length; if(n===0) return null;
+    const candleW = Math.max(2, Math.min(24, Math.floor(iw / Math.max(6, n) * 0.7)));
+    for(let i=0;i<n;i++){
+      const cx = padL + (i/(n-1 || 1))*iw;
+      const openY = yForCanvas(candles[i].o, padT, ih, minV_global, maxV_global);
+      const closeY = yForCanvas(candles[i].c, padT, ih, minV_global, maxV_global);
+      const highY = yForCanvas(candles[i].h, padT, ih, minV_global, maxV_global);
+      const lowY  = yForCanvas(candles[i].l, padT, ih, minV_global, maxV_global);
+      const bx = Math.round(cx - candleW/2);
+      const by = Math.round(Math.min(openY, closeY));
+      const bh = Math.max(1, Math.round(Math.abs(closeY - openY)));
+      const top = by, left = bx, right = bx + candleW, bottom = by + bh;
+      const rect = chart.getBoundingClientRect();
+
+      // 1) Body hit: inside rectangle -> anchor to close price Y
+      if(clientX >= rect.left + left && clientX <= rect.left + right && clientY >= rect.top + top && clientY <= rect.top + bottom){
+        let clientXc, clientYc, clientTopY;
+        if(cachedXs && cachedXs.length === n && cachedTopYs && cachedTopYs.length === n){
+          // Use cached (float) canvas-relative coords so overlay and tooltip anchor exactly match the drawn shapes
+          clientXc = rect.left + cachedXs[i];
+          clientTopY = rect.top + cachedTopYs[i];
+          clientYc = rect.top + closeY;
+        } else {
+          clientXc = rect.left + cx;
+          clientYc = rect.top + closeY;
+          clientTopY = rect.top + highY;
+        }
+        return { idx:i, candle:candles[i], clientX: clientXc, clientY: clientYc, clientTopY };
+      }
+
+      // 2) Wick hit: allow a small horizontal tolerance around the wick x and vertical between high/low
+      const WICK_HIT_RADIUS = Math.max(3, Math.floor(candleW * 0.5));
+      if(clientX >= rect.left + cx - WICK_HIT_RADIUS && clientX <= rect.left + cx + WICK_HIT_RADIUS && clientY >= rect.top + Math.round(highY) && clientY <= rect.top + Math.round(lowY)){
+        let clientXc, clientYc, clientTopY;
+        if(cachedXs && cachedXs.length === n && cachedTopYs && cachedTopYs.length === n){
+          clientXc = rect.left + cachedXs[i];
+          clientTopY = rect.top + cachedTopYs[i];
+          clientYc = rect.top + closeY;
+        } else {
+          clientXc = rect.left + cx;
+          clientYc = rect.top + closeY;
+          clientTopY = rect.top + highY;
+        }
+        return { idx:i, candle:candles[i], clientX: clientXc, clientY: clientYc, clientTopY };
+      }
+    }
+    return null;
+  }
+
+  // helpers used by hitTestCandle (we need global min/max used while drawing)
+  let minV_global = 0, maxV_global = 1;
+  // Cached per-index canvas pixel coordinates filled by drawChart()
+  // - cachedXs: x coordinate in canvas CSS pixels (relative to canvas left)
+  // - cachedTopYs: topmost visual pixel Y (padT + highY) in canvas CSS pixels
+  let cachedXs = [], cachedTopYs = [];
+  function yForCanvas(v, padT, ih, minV, maxV){ return padT + (1 - (v-minV)/Math.max(1e-9, maxV-minV))*ih; }
+
+  // Update globals before drawChart finishes, so hit-testing can use same scale
+  const origDrawChart = drawChart;
+  // wrap drawChart to capture min/max into globals (safe since drawChart declared earlier)
+  // But drawChart is defined later; instead, patch _after_ drawChart: attach an event to update globals in render loop below.
+
+  // Pointer handlers (rAF-throttled to avoid high-frequency work)
+  let pointerActive = false;
+  let _pendingPointer = null;
+  let _pointerRaf = null;
+
+  function _processPointerEvent(ev){
+    try{
+      const sym = SYMBOLS[_selected_idx];
+      let npt = null;
+      if(CHART_MODE === 'candle'){
+        // prefer precise candle hit-test (body/wick), fall back to nearest point
+        npt = hitTestCandle(ev.clientX, ev.clientY) || findNearestPoint(ev.clientX, ev.clientY);
+      } else {
+        npt = findNearestPoint(ev.clientX, ev.clientY);
+      }
+
+      if(npt){
+        const idx = Math.max(0, Math.min((npt.idx || 0), Number.MAX_SAFE_INTEGER));
+        hoverIndex = idx;
+
+        if(CHART_MODE === 'candle'){
+          const candles = chart_candles[sym] || [];
+          const c = candles[idx] || { t: npt.time, o: npt.price, h: npt.price, l: npt.price, c: npt.price };
+          const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
+          const html = `
+            <span class="tt-line">${sym} • ${fmtTs(c.t, { seconds: true, showDate: true })}</span>
+            <span class="tt-line">C ${formatWithSpec(c.c, spec)}</span>
+            <span class="tt-line">O ${formatWithSpec(c.o, spec)}</span>
+            <span class="tt-line">H ${formatWithSpec(c.h, spec)}</span>
+            <span class="tt-line">L ${formatWithSpec(c.l, spec)}</span>
+          `;
+          // ensure anchorTopY references the topmost visual pixel for the candle (highY)
+          let anchorTop = (npt.clientTopY != null) ? npt.clientTopY : null;
+          if(anchorTop == null && candles[idx]){
+            try{
+              const rect = chart.getBoundingClientRect();
+              const ccoords = canvasToDataCoord(ev.clientX, ev.clientY);
+              const highY = yForCanvas(candles[idx].h, ccoords.padT, ccoords.ih, minV_global, maxV_global);
+              anchorTop = Math.round(rect.top + highY);
+            }catch(e){ anchorTop = npt.clientY; }
+          }
+          if(npt.clientX != null && npt.clientY != null) showTooltip(html, npt.clientX, npt.clientY, 'point', anchorTop);
+          else showTooltip(html, ev.clientX, ev.clientY, 'cursor');
+          return;
+        } else {
+          const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
+          const html = `<span class="tt-line">${sym} • ${fmtTs(npt.time, { seconds: true, showDate: true })}</span><span class="tt-price">${formatWithSpec(npt.price, spec)}</span>`;
+          const anchorTop = (npt.clientTopY != null) ? npt.clientTopY : npt.clientY;
+          if(npt.clientX != null && npt.clientY != null) showTooltip(html, npt.clientX, npt.clientY, 'point', anchorTop);
+          else showTooltip(html, ev.clientX, ev.clientY, 'cursor');
+          return;
+        }
+      }
+
+      hoverIndex = null;
+      hideTooltip();
+    }catch(e){ hoverIndex = null; hideTooltip(); }
+  }
+
+  chart.addEventListener('pointermove', (ev)=>{
+    pointerActive = true;
+    // immediate overlay draw for instant guide-line responsiveness
+    try{
+      const c = canvasToDataCoord(ev.clientX, ev.clientY);
+      const n = (CHART_MODE === 'candle') ? (chart_candles[SYMBOLS[_selected_idx]]||[]).length : (chart_series[SYMBOLS[_selected_idx]]||[]).length;
+      if(n>0){
+        // Use the same hit-test logic as the tooltip to pick the index. This avoids divergence
+        // between the overlay index and the tooltip/hit-test index caused by small rounding differences.
+        let npt = null;
+        if(CHART_MODE === 'candle') npt = hitTestCandle(ev.clientX, ev.clientY) || findNearestPoint(ev.clientX, ev.clientY);
+        else npt = findNearestPoint(ev.clientX, ev.clientY);
+        let idx = null;
+        if(npt && typeof npt.idx === 'number') idx = Math.max(0, Math.min(n-1, npt.idx));
+        // Prefer cached X if available (cachedXs are stored as DPR-aligned CSS floats)
+        const useCached = (idx!=null && cachedXs && cachedXs.length === n);
+        const gx = useCached ? cachedXs[idx] : (c.padL + (n>1 ? ((idx!=null?idx:0)/(n-1))*c.iw : c.iw/2));
+        // Position the DOM guide using canvas-relative CSS X
+        positionChartGuideByCssX(gx, c.padT, c.ih);
+        // Optionally draw debug markers onto overlay canvas when CHART_DEBUG is enabled
+        if(CHART_DEBUG && overlayCtx && typeof idx === 'number' && cachedXs && cachedTopYs && idx>=0 && idx<cachedXs.length){
+          try{ clearOverlay(); overlayCtx.save(); overlayCtx.fillStyle='rgba(255,0,0,0.9)'; overlayCtx.beginPath(); overlayCtx.arc(cachedXs[idx], cachedTopYs[idx], 3, 0, Math.PI*2); overlayCtx.fill(); overlayCtx.restore(); }catch(e){}
+        } else if(CHART_DEBUG){ clearOverlay(); }
+      }
+    }catch(e){}
+
+    _pendingPointer = ev;
+    if(_pointerRaf) return;
+    _pointerRaf = requestAnimationFrame(()=>{
+      _pointerRaf = null;
+      const ev2 = _pendingPointer;
+      _pendingPointer = null;
+      if(ev2) _processPointerEvent(ev2);
+    });
+  }, {passive:true});
+
+  // Support touch/pen: show tooltip immediately on pointerdown (tap), keep it until pointerup/cancel
+  chart.addEventListener('pointerdown', (ev)=>{
+    pointerActive = true;
+    try{ _processPointerEvent(ev); }catch(e){}
+  }, {passive:true});
+
+  chart.addEventListener('pointerup', (ev)=>{ pointerActive = false; /* keep tooltip visible briefly, but don't force-hide here */ }, {passive:true});
+  chart.addEventListener('pointercancel', (ev)=>{ pointerActive = false; hoverIndex = null; hideTooltip(); }, {passive:true});
+
+  chart.addEventListener('pointerleave', ()=>{ pointerActive=false; hoverIndex = null; hideTooltip(); clearOverlay(); hideChartGuide(); });
+
 
   function updateChartAnchors(){
     const headerCells = Array.from(theadEl.querySelectorAll("th")).filter(th=>{
@@ -1392,7 +1747,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     }
   }catch(e){}
 
-    sizeCanvas();
+  sizeCanvas();
+  // clear overlay before full redraw so overlay doesn't persist
+  clearOverlay();
     const w = chart.clientWidth, h = chart.clientHeight;
     ctx.clearRect(0,0,w,h);
 
@@ -1422,6 +1779,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     // Avoid zero-range
     if(minV === maxV){ const delta = Math.abs(minV) * 0.001 || 1; minV -= delta; maxV += delta; }
     const spec = SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT;
+
+  // expose min/max for tooltip hit-testing
+  minV_global = minV;
+  maxV_global = maxV;
 
     const padRcss = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-r"))||16;
     const padLbase= parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-pad-l-base"))||100;
@@ -1459,26 +1820,39 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(cur!=null)  ctx.fillText(formatWithSpec(cur,spec),  padL, roundPX(y(cur)));
 
     if(CHART_MODE === 'candle'){
-      // draw candles from chart_candles[sym]
+      // draw candles from chart_candles[sym] using DPR-aligned coordinates
       const candles = chart_candles[sym] || [];
       const n = candles.length;
+      cachedXs = new Array(n);
+      cachedTopYs = new Array(n);
       if(n>0){
         const candleW = Math.max(2, Math.min(24, Math.floor(iw / Math.max(6, n) * 0.7)));
+        const dpr = Math.max(1, DPR_MAX);
+        // First pass: compute DPR-aligned centers/top Ys for every candle
+        for(let i=0;i<n;i++){
+          const cx = padL + (i/(n-1 || 1))*iw;
+          const highY = y(candles[i].h);
+          const alignedX = (Math.round(cx * dpr) + 0.5) / dpr;
+          const alignedTopY = (Math.round(highY * dpr) + 0.5) / dpr;
+          cachedXs[i] = alignedX;
+          cachedTopYs[i] = alignedTopY;
+        }
+        // Second pass: draw using aligned coords
         for(let i=0;i<n;i++){
           const c = candles[i];
-          const cx = padL + (i/(n-1 || 1))*iw;
-          const ox = cx; // center x
+          const ox = cachedXs[i];
           const openY = y(c.o);
           const closeY = y(c.c);
-          const highY = y(c.h);
-          const lowY = y(c.l);
+          const highY = cachedTopYs[i];
+          const lowYraw = y(c.l);
+          const lowY = (Math.round(lowYraw * dpr) + 0.5) / dpr;
           const isUp = c.c >= c.o;
           ctx.strokeStyle = isUp ? 'rgba(22,199,132,0.9)' : 'rgba(234,57,67,0.9)';
           ctx.fillStyle = isUp ? 'rgba(22,199,132,0.18)' : 'rgba(234,57,67,0.18)';
           ctx.lineWidth = 1;
-          // wick
+          // wick - draw aligned
           ctx.beginPath(); ctx.moveTo(ox, highY); ctx.lineTo(ox, lowY); ctx.stroke();
-          // body
+          // body - we align body box by rounding to CSS pixels where appropriate
           const bw = candleW;
           const bx = Math.round(ox - bw/2);
           const by = Math.round(Math.min(openY, closeY));
@@ -1487,18 +1861,35 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           ctx.strokeRect(bx+0.5, by+0.5, bw-1, bh-1);
         }
       }
+      // guide line is drawn on the overlay for instant responsiveness (avoid duplicate drawing here)
     } else {
-      // line mode
-      ctx.beginPath(); ctx.moveTo(x(0), y(series[0]));
-      for(let i=1;i<series.length;i++) ctx.lineTo(x(i), y(series[i]));
-      ctx.strokeStyle="#5ca8ff"; ctx.lineWidth=1; ctx.stroke();
-
+      // line mode - compute DPR-aligned points and draw the path
+      const n = series.length;
+      cachedXs = new Array(n);
+      cachedTopYs = new Array(n);
+      const dpr = Math.max(1, DPR_MAX);
+      for(let i=0;i<n;i++){
+        const px = x(i);
+        const py = y(series[i]);
+        cachedXs[i] = (Math.round(px * dpr) + 0.5) / dpr;
+        cachedTopYs[i] = (Math.round(py * dpr) + 0.5) / dpr;
+      }
+      if(n>0){
+        ctx.beginPath(); ctx.moveTo(cachedXs[0], cachedTopYs[0]);
+        for(let i=1;i<n;i++) ctx.lineTo(cachedXs[i], cachedTopYs[i]);
+        ctx.strokeStyle="#5ca8ff"; ctx.lineWidth=1; ctx.stroke();
+      }
       const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
       grad.addColorStop(0,"rgba(134,185,255,.28)");
       grad.addColorStop(1,"rgba(134,185,255,0)");
       ctx.lineTo(padL+iw, padT+ih); ctx.lineTo(padL, padT+ih); ctx.closePath();
       ctx.fillStyle=grad; ctx.fill();
+
+      // guide line is drawn on the overlay for instant responsiveness (avoid duplicate drawing here)
     }
+
+    // If debugging, draw markers on main canvas to compare against overlay
+    try{ drawMainDebugMarkers(); }catch(e){}
 
     renderAxis(); // live axis
   }
@@ -1810,6 +2201,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(tag==="input"||tag==="textarea"||e.isComposing) return;
     if(e.key==="c"||e.key==="C"){ e.preventDefault(); await toggleChart(); return; }
     if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
+  if(e.key==="d"||e.key==="D"){ e.preventDefault(); CHART_DEBUG = !CHART_DEBUG; clearOverlay(); drawChart(); return; }
     if(e.key==="v"||e.key==="V"){ e.preventDefault();
   // toggle between line and candle modes
   CHART_MODE = (CHART_MODE === 'line') ? 'candle' : 'line';
