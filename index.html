@@ -9,6 +9,7 @@
   --base-font-size:14px;
     --bg:#0b0d10; 
     --surface:#0d1217; 
+    --surface-2:#0f1419;
     --border:#1a1a1a; 
     --fg:#e8eef3; 
     --muted:#aab7c4;
@@ -32,6 +33,20 @@
     --footer-height:56px;
     /* fixed viewport gutters for both widgets and footer */
     --side-gutter: clamp(12px, 2vw, 24px);
+  }
+
+  /* Light mode overrides */
+  body.light{
+    --bg:#f7fafc;
+    --surface:#ffffff;
+    --surface-2:#f3f6fa;
+    --border:#e2e8f0;
+    --fg:#0b0d10;
+    --muted:#556274;
+    --pos:#059669;
+    --neg:#dc2626;
+    --accent:#2563eb;
+    --accent-2:#3b82f6;
   }
 
   /* Center the entire dashboard (falls back on short screens) */
@@ -122,9 +137,9 @@
   }
   /* Reduce hover shadow and use a subtle background so separators don't change contrast */
   @media (hover: hover) and (pointer: fine) {
-  tbody tr:hover{ transform:translateX(-1px); background:rgba(133, 184, 255, 0.1); box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  tbody tr:hover{ transform:translateX(-1px); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow:0 1px 4px rgba(0,0,0,.08); }
   /* Match legend period item hover with table row hover affordance but avoid horizontal movement to prevent flicker */
-  #chartLegend .legend-period-item:hover{ background:rgba(133, 184, 255, 0.1); box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  #chartLegend .legend-period-item:hover{ background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow:0 1px 4px rgba(0,0,0,.08); }
   }
 
   /* Prevent mobile browsers from leaving a persistent focus/active highlight on rows */
@@ -188,7 +203,7 @@
   #chartTooltip{
     position: fixed;
     pointer-events: none;
-    background: rgba(12,16,20,0.95);
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
     color: var(--fg);
     border: 1px solid var(--border);
     padding: 8px 10px;
@@ -524,6 +539,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         <span><span class="kbd">c</span> show/hide chart</span>
   <span><span class="kbd">v</span> toggle line/candle</span>
   <span><span class="kbd">e</span> edit coins</span>
+  <span><span class="kbd">t</span> toggle light/dark</span>
       </div>
     </div>
   </div>
@@ -588,6 +604,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
   /* ---------- Persistence (localStorage) ---------- */
   const STORAGE_KEY = 'hype_dashboard:user';
+  let THEME = 'dark'; // 'dark' | 'light'
   function loadPersisted(){
     try{
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -598,14 +615,18 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       if(obj.liq && typeof obj.liq === 'object') Object.assign(MY_LIQ_PRICE, obj.liq);
       if(obj.fmt && typeof obj.fmt === 'object') Object.assign(SYMBOL_FORMAT, obj.fmt);
     if(obj.chartMode && (obj.chartMode === 'line' || obj.chartMode === 'candle')) CHART_MODE = obj.chartMode;
+    if(obj.theme && (obj.theme === 'light' || obj.theme === 'dark')) THEME = obj.theme;
   if(typeof obj.chartLookbackIdx === 'number') CHART_LOOKBACK_IDX = Math.max(0, Math.min(LOOKBACKS_CHART.length-1, obj.chartLookbackIdx));
     }catch(e){ console.debug('loadPersisted failed', e); }
   }
   function savePersisted(){
     try{
-  const payload = { symbols: SYMBOLS, avg: MY_AVG_PRICE, liq: MY_LIQ_PRICE, fmt: SYMBOL_FORMAT, chartMode: CHART_MODE, chartLookbackIdx: CHART_LOOKBACK_IDX };
+  const payload = { symbols: SYMBOLS, avg: MY_AVG_PRICE, liq: MY_LIQ_PRICE, fmt: SYMBOL_FORMAT, chartMode: CHART_MODE, chartLookbackIdx: CHART_LOOKBACK_IDX, theme: THEME };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     }catch(e){ console.debug('savePersisted failed', e); }
+  }
+  function applyTheme(){
+    document.body.classList.toggle('light', THEME === 'light');
   }
 
   // Defensive: ensure CHART_LOOKBACK_IDX is always valid against the current LOOKBACKS_CHART
@@ -1812,7 +1833,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       ctx.restore();
     }
 
-    ctx.fillStyle="#e6edf3"; ctx.textAlign="left"; ctx.textBaseline="middle";
+  ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--fg') || '#0b0d10'; ctx.textAlign="left"; ctx.textBaseline="middle";
     if(maxV!=null) ctx.fillText(formatWithSpec(maxV,spec), padL, roundPX(y(maxV)));
     if(minV!=null) ctx.fillText(formatWithSpec(minV,spec), padL, roundPX(y(minV)));
     if(cur!=null)  ctx.fillText(formatWithSpec(cur,spec),  padL, roundPX(y(cur)));
@@ -2198,7 +2219,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const tag=(e.target?.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea"||e.isComposing) return;
     if(e.key==="c"||e.key==="C"){ e.preventDefault(); await toggleChart(); return; }
-    if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
+  if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
+  if(e.key==="t"||e.key==="T"){ e.preventDefault(); THEME = (THEME === 'light' ? 'dark' : 'light'); applyTheme(); try{ savePersisted(); }catch(e){} drawChart(); updateTable(); return; }
   if(e.key==="d"||e.key==="D"){ e.preventDefault(); CHART_DEBUG = !CHART_DEBUG; clearOverlay(); drawChart(); return; }
     if(e.key==="v"||e.key==="V"){ e.preventDefault();
   // toggle between line and candle modes
@@ -2274,6 +2296,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   async function main(){
   try{ loadPersisted(); }catch(e){}
   try{ ensureChartIdx(); }catch(e){}
+  applyTheme();
   buildTableHeader();
     hydrateTable();
     connectWs();
