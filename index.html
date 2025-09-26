@@ -561,19 +561,33 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
   let SYMBOLS = ["BTC","ETH","SOL","HYPE"];
 
-  // Chart lookbacks: smallest span is 1h (30m removed for chart view)
+  // Chart lookbacks: extended with multi-month and multi-year windows
   const LOOKBACKS_CHART = [
     ["1h",60*60],["3h",3*60*60],["24h",24*60*60],["7d",7*24*60*60],["30d",30*24*60*60],
+    ["90d",90*24*60*60],["180d",180*24*60*60],["1y",365*24*60*60],["2y",2*365*24*60*60],
   ];
 
-  // Table lookbacks: include finer-grained 5m and 30m for the table widget
+  // Table lookbacks: keep short terms plus select longer horizons (omit 2y to avoid overly wide table unless needed)
   const LOOKBACKS_TABLE = [
     ["5m",5*60],["30m",30*60],["1h",60*60],["3h",3*60*60],["24h",24*60*60],["7d",7*24*60*60],["30d",30*24*60*60],
+    ["90d",90*24*60*60],["180d",180*24*60*60],["1y",365*24*60*60],["2y",2*365*24*60*60],
   ];
 
   // Unified intervals used for both line sampling and candle rendering.
-  // Include mapping for 5m (used by the table) as well as other lookbacks.
-  const INTERVAL_FOR_LOOKBACK = {"5m":"1m","30m":"1m","1h":"1m","3h":"5m","24h":"1h","7d":"4h","30d":"1d"};
+  // Intervals chosen to keep requests under ~200 candles by window.
+  const INTERVAL_FOR_LOOKBACK = {
+    "5m":"1m",
+    "30m":"1m",
+    "1h":"1m",
+    "3h":"5m",
+    "24h":"1h",
+    "7d":"4h",
+    "30d":"1d",
+    "90d":"1d",
+    "180d":"3d",
+    "1y":"1w",
+    "2y":"1w"
+  };
 
   const BASELINE_REFRESH_SECONDS = LOWPOWER ? 120 : 60;
   const USE_BASELINE_INTERPOLATION = false;
@@ -704,7 +718,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const t = seconds ? `${hh}:${m}:${s} ${ampm}` : `${hh}:${m} ${ampm}`;
   if(!showDate) return t;
   const monthNames = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-  const md = `${monthNames[d.getMonth()]} ${d.getDate()}`;
+  const md = `${monthNames[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`;
   return `${md} ${t}`;
   }
   function fmtAgeMs(ms){
