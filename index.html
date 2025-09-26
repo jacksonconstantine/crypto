@@ -17,12 +17,36 @@
     --neg:#ea3943; 
     --accent:#86b9ff; 
     --accent-2:#5ca8ff;
+    /*
+      Spacing scale (uniform rhythm)
+      2px increments up to 16, then larger steps.
+      Use these for margins / padding / gaps instead of magic numbers.
+      Naming: --space-N where N ascends with size (not strictly linear beyond 16).
+    */
+    --space-1:2px;
+    --space-2:4px;
+    --space-3:6px;
+    --space-4:8px;
+    --space-5:10px;
+    --space-6:12px;
+    --space-7:14px;
+    --space-8:16px;
+    --space-9:20px;
+    --space-10:24px;
+    --space-11:28px;
+    --space-12:32px;
 
-    /* layout rhythm */
-    --gap:16px;
-    --pad-h:16px;
-    --pad-v:14px;
+    /* Legacy vars mapped onto the new scale (kept to avoid churn in code) */
+    --gap: var(--space-8);      /* was 16px */
+    --pad-h: var(--space-8);    /* was 16px */
+    --pad-v: var(--space-7);    /* was 14px (approx kept) */
     --wrap-margin:clamp(12px,2vh,20px);
+
+  /* Vertical stack semantics */
+  --stack-tight: var(--space-2);   /* 4px */
+  --stack-default: var(--space-3); /* 6px */
+  --stack-comfort: var(--space-4); /* 8px */
+  --stack-roomy: var(--space-5);   /* 10px */
 
     /* measured at runtime to align chart to table content */
     --chart-pad-r:16px;      /* distance from canvas right edge to plot end */
@@ -62,6 +86,10 @@
     display:flex; align-items:center; justify-content:center;
     padding-bottom: calc(var(--footer-height) + var(--wrap-margin));
   }
+  /* Line mode: hide the OHLC grid and reclaim spacing; keep time stamp visible */
+  body.line-mode #hoverGrid{ display:none !important; }
+  body.line-mode #chartMetaHover{ align-items:flex-end; }
+  body.line-mode .hg-label, body.line-mode .hg-val{ display:none !important; }
   @media (max-height:780px){ body{ align-items:flex-start; } }
 
   /* Outer container: fixed gutters vs viewport and a max content width */
@@ -86,7 +114,7 @@
   .screen{ padding:var(--pad-v) var(--pad-h); display:flex; flex-direction:column; gap:var(--gap); }
 
   /* Panels */
-  .panel{ background:linear-gradient(180deg,var(--surface) 0%,var(--surface-2) 100%); border:1px solid var(--border); border-radius:14px; padding:12px var(--pad-h); min-width:0; }
+  .panel{ background:linear-gradient(180deg,var(--surface) 0%,var(--surface-2) 100%); border:1px solid var(--border); border-radius:14px; padding:var(--space-6) var(--pad-h); min-width:0; }
 
   /* Table */
   .panel-table{ overflow:hidden; }
@@ -109,7 +137,7 @@
     position:sticky; top:0; z-index:1;
     background:transparent;
     border-bottom:1px solid var(--border);
-    color:var(--muted); padding:10px 8px;
+    color:var(--fg); padding:10px 8px;
   }
   thead th:first-child{ text-align:left; }
   thead th.num{ text-align:right; }
@@ -124,7 +152,7 @@
   .row-selected .sel-dot{ visibility:visible; }
   body.chart-off .sel-dot{ display:none !important; }
 
-  .muted{ color:var(--muted); }
+  .muted{ color:var(--fg); }
   .pos{ color:var(--pos); } .neg{ color:var(--neg); }
 
   /* Hover “elevate” — apply only on devices that support hover (desktop) */
@@ -162,11 +190,32 @@
 
   /* Chart */
   .panel-chart{ position:relative; }
-  .chart-head{
-    display:flex; align-items:center; justify-content:space-between; color:var(--muted);
-    margin:0 0 8px 0;
-    padding-right:8px; /* timestamp aligns with rightmost table content (cell padding) */
-    position:relative; /* allow absolute positioning of the axis for pixel-perfect alignment */
+  .chart-head{ margin:0 0 8px 0; position:relative; }
+  .chart-meta{ display:flex; justify-content:space-between; align-items:stretch; gap:var(--space-10); }
+  .chart-meta-left{ display:flex; flex-direction:column; justify-content:flex-start; gap:var(--stack-roomy); min-width:0; }
+  .chart-meta-right{ display:flex; flex-direction:column; justify-content:flex-start; gap:var(--stack-default); flex:1; min-width:0; align-items:flex-end; text-align:right; }
+  .chart-meta-left .meta-token{ font-weight:500; letter-spacing:.5px; }
+  .chart-meta-left .meta-price{ font-weight:500; line-height:1.2; }
+  .chart-meta-left .meta-change{ font-weight:500; }
+  .chart-meta-right .meta-periods{ display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
+  .chart-meta-right .meta-granularity, .chart-meta-right .meta-axis{ color:var(--fg); }
+  .meta-period-item{ padding:5px 10px; border-radius:8px; background:transparent; color:var(--fg); cursor:pointer; border:1px solid transparent; }
+  /* Framed chart area (lines at top & bottom define the chart region) */
+  .chart-frame{ position:relative; border-top:1px solid var(--border); border-bottom:1px solid var(--border); margin:var(--space-5) 0; }
+  .chart-frame canvas{ display:block; }
+  /* Bottom controls now sit below the framed chart area */
+  #chartControls{ margin-top:var(--space-5); display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:var(--space-5); }
+  #chartControls .meta-periods{ display:flex; flex-wrap:wrap; gap:18px; justify-content:flex-start; }
+  #chartControls .meta-axis{ color:var(--fg); text-align:right; white-space:nowrap; }
+  /* On mobile hide axis, keep only periods left */
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) { #chartControls .meta-axis{ display:none; } }
+  .meta-period-item.selected{ background:rgba(255,255,255,.04); color:var(--fg); border:1px solid var(--border); }
+  body.light .meta-period-item.selected{ background:color-mix(in srgb, var(--accent) 15%, transparent); }
+  .meta-period-item:hover{ background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) {
+    .chart-meta{ flex-direction:row; align-items:flex-start; }
+    .chart-meta-right .meta-granularity, .chart-meta-right .meta-axis{ display:none; }
+    .chart-meta-right{ gap:4px; }
   }
   canvas#chart{
     width:100%; height:300px; display:block; border:none; border-radius:12px;
@@ -199,26 +248,7 @@
   #chartGuide.visible{ opacity:1; }
 
 
-  /* Tooltip styles for chart hover */
-  #chartTooltip{
-    position: fixed;
-    pointer-events: none;
-    background: color-mix(in srgb, var(--surface) 92%, transparent);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    padding: 8px 10px;
-    border-radius: 8px;
-    font-size: calc(var(--base-font-size) - 1px);
-    box-shadow: 0 6px 24px rgba(0,0,0,.5);
-    white-space: nowrap;
-    z-index: 60;
-    transform-origin: left top;
-    transition: opacity .12s ease, transform .12s ease;
-    opacity: 0; transform: translateY(-6px) scale(.98);
-  }
-  #chartTooltip.visible{ display:block; opacity:1; transform: translateY(0) scale(1); }
-  #chartTooltip .tt-line{ color:var(--muted); display:block; margin-bottom:4px; }
-  #chartTooltip .tt-price{ font-weight:600; display:block; }
+  /* Tooltip removed: hover data now lives persistently in meta header */
 
   /* Smoothen table and price transitions to avoid abrupt jumps */
   td.c-price{ transition: color .18s ease, opacity .12s ease, background-color .28s ease; }
@@ -295,12 +325,12 @@
   #chartLegend .kbd{ background:rgba(255,255,255,.02); border:1px solid var(--border); color:var(--muted); padding:2px 6px; border-radius:6px; font:inherit; }
 
   /* Keep lookbacks present (don’t hide) so horizontal scroll works consistently */
-  @media (max-width:1200px){ col.lb-30d, th.lb-30d, td.lb-30d{display:table-cell;} }
-  @media (max-width:1100px){ col.lb-7d,  th.lb-7d,  td.lb-7d {display:table-cell;} }
-  @media (max-width:1020px){ col.lb-24h, th.lb-24h, td.lb-24h{display:table-cell;} }
-  @media (max-width:940px) { col.lb-3h,  th.lb-3h,  td.lb-3h {display:table-cell;} }
-  @media (max-width:880px) { col.lb-1h,  th.lb-1h,  td.lb-1h {display:table-cell;} }
-  @media (max-width:820px) { col.lb-30m, th.lb-30m, td.lb-30m{display:table-cell;} }
+  @media (max-width:1200px){ col.lb-30D, th.lb-30D, td.lb-30D{display:table-cell;} }
+  @media (max-width:1100px){ col.lb-7D,  th.lb-7D,  td.lb-7D {display:table-cell;} }
+  @media (max-width:1020px){ col.lb-24H, th.lb-24H, td.lb-24H{display:table-cell;} }
+  @media (max-width:940px) { col.lb-3H,  th.lb-3H,  td.lb-3H {display:table-cell;} }
+  @media (max-width:880px) { col.lb-1H,  th.lb-1H,  td.lb-1H {display:table-cell;} }
+  @media (max-width:820px) { col.lb-30M, th.lb-30M, td.lb-30M{display:table-cell;} }
 
   /* Ensure base font size remains consistent on mobile */
   @media (max-width: 899px), (hover: none) and (pointer: coarse) {
@@ -364,7 +394,7 @@
   .ctxmenu{ position:fixed; z-index:9999; min-width:220px;
     background:var(--surface); border:1px solid var(--border); border-radius:10px;
     box-shadow:0 10px 30px rgba(0,0,0,.35); overflow:hidden; }
-  .ctxmenu .hdr{ padding:8px 12px; color:var(--muted); border-bottom:1px solid var(--border); font-weight:600; }
+  .ctxmenu .hdr{ padding:8px 12px; color:var(--muted); border-bottom:1px solid var(--border); font-weight:500; }
   .ctxmenu button{ all:unset; display:block; width:100%; padding:10px 12px; cursor:pointer; }
   .ctxmenu button:hover{ background:rgba(255,255,255,.06); }
 
@@ -440,6 +470,22 @@
   #ctxMenu.bulk-editor .btn{
     background:rgba(255,255,255,.04); border:1px solid var(--border); padding:6px 10px; border-radius:8px; cursor:pointer; color:var(--fg); font-family:inherit; font-size:var(--base-font-size);
   }
+  /* --- Overrides injected for period selector redesign (inline, no bubbles) --- */
+  #chartControls{ gap:var(--space-5) !important; }
+  #chartControls .meta-periods{ gap:18px !important; align-items:center !important; justify-content:flex-start !important; }
+  .meta-period-item{ padding:0 !important; border:none !important; border-radius:0 !important; background:transparent !important; font-weight:400 !important; position:relative !important; }
+  .meta-period-item.selected{ background:transparent !important; color:var(--accent) !important; font-weight:500 !important; border:none !important; }
+  .meta-period-item::after{ content:""; position:absolute; left:0; right:0; bottom:-2px; height:0; background:var(--accent); transition:height .12s ease; }
+  .meta-period-item.selected::after{ height:2px; }
+  .meta-period-item:hover{ color:var(--accent) !important; }
+  /* Remove old hover background remnants */
+  .meta-period-item:hover{ background:transparent !important; }
+
+  /* Enlarged token + price in chart meta (requested) */
+  .chart-meta-left .meta-token,
+  .chart-meta-left .meta-price{
+    font-size: calc(var(--base-font-size) + 10px);
+  }
 </style>
 <script id="touch-alias-script">(function(){
   // Add .touch to <html> on iPadOS and similar devices that support touch but
@@ -505,21 +551,44 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         <!-- CHART -->
     <div class="panel panel-chart" id="panelChart" style="position:relative;">
     <div class="chart-head">
-            <!-- Legend split into 4 even subsections: token | periods/span | granularity | date/time axis -->
-            <div id="chartLegend" class="muted">
-              <div class="legend-section token" id="chartToken">BTC</div>
-              <div class="legend-section periods" id="chartPeriods">—</div>
-              <div class="legend-section granularity" id="chartGranularity">—</div>
-              <div class="legend-section axis" id="chartAxis">—</div>
+      <div class="chart-meta" id="chartMeta">
+        <div class="chart-meta-left">
+          <div class="meta-token" id="chartMetaToken">BTC</div>
+          <div class="meta-price" id="chartMetaPrice">—</div>
+          <div class="meta-change" id="chartMetaChange">—</div>
+        </div>
+        <div class="chart-meta-right" id="chartMetaRight">
+          <div class="meta-hover" id="chartMetaHover" style="display:none; flex-direction:column; align-items:flex-end; gap:var(--stack-roomy); opacity:0; transition:opacity .12s ease;">
+            <div class="hover-time" id="hoverTime" style="font-size:calc(var(--base-font-size) - 1px); opacity:.85;">&nbsp;</div>
+            <div class="hover-grid" id="hoverGrid" style="display:grid; grid-template-columns: repeat(4, auto); grid-template-rows: repeat(2, auto); column-gap:22px; row-gap:var(--stack-roomy); align-items:center;">
+              <!-- Row 1: CLOSE (label,value), HIGH (label,value) -->
+              <div class="hg-label hg-close" style="font-size:calc(var(--base-font-size) - 1px); opacity:.65; text-align:left;">CLOSE</div>
+              <div class="hg-val hg-close-v" id="hoverClose" style="font-weight:500; text-align:right;">—</div>
+              <div class="hg-label hg-high" style="font-size:calc(var(--base-font-size) - 1px); opacity:.65; text-align:left;">HIGH</div>
+              <div class="hg-val hg-high-v" id="hoverHigh" style="text-align:right;">—</div>
+              <!-- Row 2: OPEN (label,value), LOW (label,value) -->
+              <div class="hg-label hg-open" style="font-size:calc(var(--base-font-size) - 1px); opacity:.65; text-align:left;">OPEN</div>
+              <div class="hg-val hg-open-v" id="hoverOpen" style="text-align:right;">—</div>
+              <div class="hg-label hg-low" style="font-size:calc(var(--base-font-size) - 1px); opacity:.65; text-align:left;">LOW</div>
+              <div class="hg-val hg-low-v" id="hoverLow" style="text-align:right;">—</div>
             </div>
           </div>
-          <canvas id="chart" width="800" height="300"></canvas>
-          <!-- Overlay canvas kept for other debug drawings -->
-          <canvas id="chartOverlay" width="800" height="300" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
-          <!-- DOM vertical guide for hover (positioned using cached canvas coords to avoid raster alignment issues) -->
-          <div id="chartGuide" aria-hidden="true"></div>
-          <!-- Tooltip for chart hover -->
-          <div id="chartTooltip" role="status" aria-hidden="true" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+          <div class="chart-frame">
+            <canvas id="chart" width="800" height="300"></canvas>
+            <!-- Overlay canvas kept for other debug drawings -->
+            <canvas id="chartOverlay" width="800" height="300" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
+            <!-- DOM vertical guide for hover -->
+            <div id="chartGuide" aria-hidden="true"></div>
+            <!-- (Tooltip removed; hover data now shown in meta header) -->
+          </div>
+          <!-- Bottom controls below the framed chart -->
+          <div id="chartControls">
+            <div class="meta-periods" id="chartPeriods">—</div>
+            <div class="meta-axis" id="chartAxis">—</div>
+          </div>
           <div class="loading-overlay" aria-hidden="true">
             <div class="spinner" role="img" aria-hidden="true"></div>
             <div class="label">Loading chart…</div>
@@ -563,30 +632,29 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
   // Chart lookbacks: extended with multi-month and multi-year windows
   const LOOKBACKS_CHART = [
-    ["1h",60*60],["3h",3*60*60],["24h",24*60*60],["7d",7*24*60*60],["30d",30*24*60*60],
-    ["90d",90*24*60*60],["180d",180*24*60*60],["1y",365*24*60*60],["2y",2*365*24*60*60],
+    ["1H",60*60],["3H",3*60*60],["24H",24*60*60],["7D",7*24*60*60],["30D",30*24*60*60],
+    ["90D",90*24*60*60],["1Y",365*24*60*60],["2Y",2*365*24*60*60],
   ];
 
   // Table lookbacks: keep short terms plus select longer horizons (omit 2y to avoid overly wide table unless needed)
   const LOOKBACKS_TABLE = [
-    ["5m",5*60],["30m",30*60],["1h",60*60],["3h",3*60*60],["24h",24*60*60],["7d",7*24*60*60],["30d",30*24*60*60],
-    ["90d",90*24*60*60],["180d",180*24*60*60],["1y",365*24*60*60],["2y",2*365*24*60*60],
+    ["5M",5*60],["30M",30*60],["1H",60*60],["3H",3*60*60],["24H",24*60*60],["7D",7*24*60*60],["30D",30*24*60*60],
+    ["90D",90*24*60*60],["1Y",365*24*60*60],["2Y",2*365*24*60*60],
   ];
 
   // Unified intervals used for both line sampling and candle rendering.
   // Intervals chosen to keep requests under ~200 candles by window.
   const INTERVAL_FOR_LOOKBACK = {
-    "5m":"1m",
-    "30m":"1m",
-    "1h":"1m",
-    "3h":"5m",
-    "24h":"1h",
-    "7d":"4h",
-    "30d":"1d",
-    "90d":"1d",
-    "180d":"3d",
-    "1y":"1w",
-    "2y":"1w"
+    "5M":"1m",
+    "30M":"1m",
+    "1H":"1m",
+    "3H":"5m",
+    "24H":"1h",
+    "7D":"4h",
+    "30D":"1d",
+    "90D":"1d",
+    "1Y":"1w",
+    "2Y":"1w"
   };
 
   const BASELINE_REFRESH_SECONDS = LOWPOWER ? 120 : 60;
@@ -610,7 +678,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   // When in candle mode, use 1 hour candles (24h window -> 24 candles)
   const CHART_CANDLE_INTERVAL = '1h';
   // Selected lookback index into chart lookbacks (default to 24h)
-  let CHART_LOOKBACK_IDX = Math.max(0, LOOKBACKS_CHART.findIndex(x=>x[0]==='24h'));
+  let CHART_LOOKBACK_IDX = Math.max(0, LOOKBACKS_CHART.findIndex(x=>x[0]==='24H'));
   const CHART_REFRESH_SECONDS = 30;
 
   const DEFAULT_NUM_FORMAT = ",.2f";
@@ -686,6 +754,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const panelChart = document.getElementById("panelChart");
   const chartAxis  = document.getElementById("chartAxis");
   const chart      = document.getElementById("chart");
+  const chartMetaToken = document.getElementById('chartMetaToken');
+  const chartMetaPrice = document.getElementById('chartMetaPrice');
+  const chartMetaChange= document.getElementById('chartMetaChange');
   const hintSwitch = document.getElementById("hintSwitch");
   const ctx = chart.getContext("2d");
   const overlay = document.getElementById('chartOverlay');
@@ -737,6 +808,29 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const fmtMid=(sym,v)=>v==null?"":formatWithSpec(v, SYMBOL_FORMAT[sym]??DEFAULT_NUM_FORMAT);
   const fmtAvg=(sym,avg)=>avg==null?"—":formatWithSpec(avg, (MY_AVG_FORMAT||SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT));
   const pctChange=(nv,ov)=> (nv==null||ov==null||ov===0) ? null : (nv-ov)/ov*100;
+
+  // Live meta header updater (price + percentage) without full redraw
+  function updateMetaHeaderLive(sym){
+    try{
+      if(!chartMetaPrice || !chartMetaChange) return;
+      // If a hover interaction is active, preserve the hover-set price/change
+      if(typeof _hoverActive !== 'undefined' && _hoverActive) return;
+      const selectedSym = SYMBOLS[_selected_idx];
+      if(sym && sym !== selectedSym) return; // only update visible symbol
+      const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24h';
+      const mid = latest_mid[selectedSym];
+      chartMetaPrice.textContent = fmtMid(selectedSym, mid) || '—';
+      const base = baselines[selectedSym] ? baselines[selectedSym][lbLabel] : null;
+      const p = pctChange(mid, base);
+      chartMetaChange.textContent = '—';
+      chartMetaChange.classList.remove('pos','neg');
+      if(p!=null){
+        const arrow = p>0 ? '▲' : (p<0 ? '▼' : '');
+        chartMetaChange.textContent = `${arrow} ${p>=0?'+':''}${p.toFixed(2)}%`;
+        chartMetaChange.classList.add(p>=0?'pos':'neg');
+      }
+    }catch(e){}
+  }
 
   // Epoch helper
   const MS_EPOCH_CUTOFF = 1e12;
@@ -1388,9 +1482,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   function positionChartGuideByCssX(cssX, padT, ih){
     if(!chartGuideEl) return;
     const rect = chart.getBoundingClientRect();
-    const parentRect = panelChart.getBoundingClientRect();
-    // cssX is canvas-relative CSS pixels (0..canvas.width).
-    // Compute coordinates relative to the positioned parent (.panel-chart)
+    // parent is now the .chart-frame wrapping the canvases/guide
+    const frame = chart.closest('.chart-frame');
+    const parentRect = frame ? frame.getBoundingClientRect() : rect;
     const leftRel = (rect.left - parentRect.left) + cssX;
     const topRel = (rect.top - parentRect.top) + padT;
     const height = Math.max(0, ih);
@@ -1417,48 +1511,80 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     }catch(e){}
   }
 
-  /* ---------- TOOLTIP HOOKS ---------- */
-  const tooltipEl = document.getElementById('chartTooltip');
-  // hoverIndex: currently hovered data index for drawing guide line
+  /* ---------- HOVER META (replaces tooltip) ---------- */
+  const hoverTimeEl  = document.getElementById('hoverTime');
+  const hoverCloseEl = document.getElementById('hoverClose');
+  const hoverOpenEl  = document.getElementById('hoverOpen');
+  const hoverHighEl  = document.getElementById('hoverHigh');
+  const hoverLowEl   = document.getElementById('hoverLow');
+  const hoverWrapEl  = document.getElementById('chartMetaHover');
   let hoverIndex = null;
-
-  function showTooltip(html, clientX, clientY, anchorType='cursor', anchorTopY=null){
-    if(!tooltipEl) return;
-    tooltipEl.innerHTML = html;
-    tooltipEl.style.display = 'block';
-    tooltipEl.classList.add('visible');
-    tooltipEl.setAttribute('aria-hidden','false');
-    positionTooltip(clientX, clientY, anchorType, anchorTopY);
-  }
-  function hideTooltip(){ if(!tooltipEl) return; tooltipEl.classList.remove('visible'); tooltipEl.setAttribute('aria-hidden','true'); setTimeout(()=>{ if(tooltipEl) tooltipEl.style.display='none'; }, 120); }
-
-  function positionTooltip(pageX, pageY, anchorType, anchorTopY=null){
-    if(!tooltipEl) return;
-    const pad = 8;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const ttW = tooltipEl.offsetWidth, ttH = tooltipEl.offsetHeight;
-    let left, top;
-    if(anchorType === 'point'){
-      // center horizontally above the point
-      left = pageX - Math.round(ttW/2);
-      // If an anchorTopY (topmost drawn pixel for point) is supplied, place tooltip bottom a few pixels above it
-      if(anchorTopY != null){
-        top = anchorTopY - ttH - 8; // 8px gap above the topmost visual element
-      } else {
-        top  = pageY - ttH - 12;
-      }
-    } else {
-      // cursor-style: offset to the right and above the cursor
-      left = pageX + 12;
-      top  = pageY - ttH - 12;
+  let _hoverActive = false;
+  function clearHoverMeta(){
+    _hoverActive = false;
+    if(hoverWrapEl){
+      hoverWrapEl.style.opacity = '0';
+      // delay hiding until fade completes, then clear text so placeholders never flash
+      setTimeout(()=>{ 
+        if(!_hoverActive && hoverWrapEl){ 
+          hoverWrapEl.style.display='none';
+          if(hoverTimeEl)  hoverTimeEl.innerHTML = '&nbsp;';
+          if(hoverCloseEl) hoverCloseEl.textContent = '—';
+          if(hoverOpenEl)  hoverOpenEl.textContent = '—';
+          if(hoverHighEl)  hoverHighEl.textContent = '—';
+          if(hoverLowEl)   hoverLowEl.textContent = '—';
+        }
+      }, 120);
     }
-    // clamp to viewport
-    if(left + ttW + pad > vw) left = Math.max(pad, vw - ttW - pad);
-    if(left < pad) left = pad;
-    if(top < pad) top = pageY + 12; // if going off top, put below the anchor
-    if(top + ttH + pad > vh) top = Math.max(pad, vh - ttH - pad);
-    tooltipEl.style.left = Math.round(left) + 'px';
-    tooltipEl.style.top  = Math.round(top) + 'px';
+    updateMetaHeaderLive();
+  }
+
+  function applyHoverMetaForCandle(sym, c){
+    if(!c) return;
+    _hoverActive = true;
+    // Fill values first, then reveal panel to avoid flicker of placeholders
+    const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
+    if(hoverTimeEl)  hoverTimeEl.textContent  = fmtTs(c.t, { seconds:true, showDate:true });
+    if(hoverCloseEl) hoverCloseEl.textContent = formatWithSpec(c.c, spec);
+    if(hoverOpenEl)  hoverOpenEl.textContent  = formatWithSpec(c.o, spec);
+    if(hoverHighEl)  hoverHighEl.textContent  = formatWithSpec(c.h, spec);
+    if(hoverLowEl)   hoverLowEl.textContent   = formatWithSpec(c.l, spec);
+    if(hoverWrapEl){
+      if(hoverWrapEl.style.display !== 'flex') hoverWrapEl.style.display = 'flex';
+      requestAnimationFrame(()=>{ hoverWrapEl.style.opacity='1'; });
+    }
+    // Left meta price -> close
+    if(chartMetaPrice) chartMetaPrice.textContent = formatWithSpec(c.c, spec);
+    // Left meta % change -> candle internal change (close vs open)
+    if(chartMetaChange){
+      const p = pctChange(c.c, c.o);
+      chartMetaChange.textContent = '—';
+      chartMetaChange.classList.remove('pos','neg');
+      if(p!=null){
+        const arrow = p>0 ? '▲' : (p<0 ? '▼':'');
+        chartMetaChange.textContent = `${arrow} ${p>=0?'+':''}${p.toFixed(2)}%`;
+        chartMetaChange.classList.add(p>=0?'pos':'neg');
+      }
+    }
+  }
+
+  function applyHoverMetaForLine(sym, idx){
+    const series = chart_series[sym]||[];
+    const times = chart_times[sym]||[];
+    if(!series.length || idx==null || idx<0 || idx>=series.length) return;
+    _hoverActive = true;
+    const price = series[idx];
+    const t = times[idx];
+    const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
+    if(hoverTimeEl)  hoverTimeEl.textContent  = fmtTs(t, { seconds:true, showDate:true });
+    // Only show the close (interpreted as the hovered point value) in line mode.
+    if(hoverCloseEl) hoverCloseEl.textContent = formatWithSpec(price, spec);
+    if(hoverWrapEl){
+      if(hoverWrapEl.style.display !== 'flex') hoverWrapEl.style.display='flex';
+      requestAnimationFrame(()=>{ hoverWrapEl.style.opacity='1'; });
+    }
+    if(chartMetaPrice) chartMetaPrice.textContent = formatWithSpec(price, spec);
+    // For line mode keep global lookback % change (do not override) so no update to chartMetaChange.
   }
 
   function canvasToDataCoord(clientX, clientY){
@@ -1583,54 +1709,20 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     try{
       const sym = SYMBOLS[_selected_idx];
       let npt = null;
+      if(CHART_MODE === 'candle') npt = hitTestCandle(ev.clientX, ev.clientY) || findNearestPoint(ev.clientX, ev.clientY);
+      else npt = findNearestPoint(ev.clientX, ev.clientY);
+
+      if(!npt){ hoverIndex = null; clearHoverMeta(); return; }
+      const idx = Math.max(0, Math.min((npt.idx||0), Number.MAX_SAFE_INTEGER));
+      hoverIndex = idx;
       if(CHART_MODE === 'candle'){
-        // prefer precise candle hit-test (body/wick), fall back to nearest point
-        npt = hitTestCandle(ev.clientX, ev.clientY) || findNearestPoint(ev.clientX, ev.clientY);
+        const candles = chart_candles[sym] || [];
+        const c = candles[idx] || { t:npt.time, o:npt.price, h:npt.price, l:npt.price, c:npt.price };
+        applyHoverMetaForCandle(sym, c);
       } else {
-        npt = findNearestPoint(ev.clientX, ev.clientY);
+        applyHoverMetaForLine(sym, idx);
       }
-
-      if(npt){
-        const idx = Math.max(0, Math.min((npt.idx || 0), Number.MAX_SAFE_INTEGER));
-        hoverIndex = idx;
-
-        if(CHART_MODE === 'candle'){
-          const candles = chart_candles[sym] || [];
-          const c = candles[idx] || { t: npt.time, o: npt.price, h: npt.price, l: npt.price, c: npt.price };
-          const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
-          const html = `
-            <span class="tt-line">${sym} • ${fmtTs(c.t, { seconds: true, showDate: true })}</span>
-            <span class="tt-line">C ${formatWithSpec(c.c, spec)}</span>
-            <span class="tt-line">O ${formatWithSpec(c.o, spec)}</span>
-            <span class="tt-line">H ${formatWithSpec(c.h, spec)}</span>
-            <span class="tt-line">L ${formatWithSpec(c.l, spec)}</span>
-          `;
-          // ensure anchorTopY references the topmost visual pixel for the candle (highY)
-          let anchorTop = (npt.clientTopY != null) ? npt.clientTopY : null;
-          if(anchorTop == null && candles[idx]){
-            try{
-              const rect = chart.getBoundingClientRect();
-              const ccoords = canvasToDataCoord(ev.clientX, ev.clientY);
-              const highY = yForCanvas(candles[idx].h, ccoords.padT, ccoords.ih, minV_global, maxV_global);
-              anchorTop = Math.round(rect.top + highY);
-            }catch(e){ anchorTop = npt.clientY; }
-          }
-          if(npt.clientX != null && npt.clientY != null) showTooltip(html, npt.clientX, npt.clientY, 'point', anchorTop);
-          else showTooltip(html, ev.clientX, ev.clientY, 'cursor');
-          return;
-        } else {
-          const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
-          const html = `<span class="tt-line">${sym} • ${fmtTs(npt.time, { seconds: true, showDate: true })}</span><span class="tt-price">${formatWithSpec(npt.price, spec)}</span>`;
-          const anchorTop = (npt.clientTopY != null) ? npt.clientTopY : npt.clientY;
-          if(npt.clientX != null && npt.clientY != null) showTooltip(html, npt.clientX, npt.clientY, 'point', anchorTop);
-          else showTooltip(html, ev.clientX, ev.clientY, 'cursor');
-          return;
-        }
-      }
-
-      hoverIndex = null;
-      hideTooltip();
-    }catch(e){ hoverIndex = null; hideTooltip(); }
+    }catch(e){ hoverIndex=null; clearHoverMeta(); }
   }
 
   chart.addEventListener('pointermove', (ev)=>{
@@ -1675,10 +1767,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     try{ _processPointerEvent(ev); }catch(e){}
   }, {passive:true});
 
-  chart.addEventListener('pointerup', (ev)=>{ pointerActive = false; /* keep tooltip visible briefly, but don't force-hide here */ }, {passive:true});
-  chart.addEventListener('pointercancel', (ev)=>{ pointerActive = false; hoverIndex = null; hideTooltip(); }, {passive:true});
+  chart.addEventListener('pointerup', (ev)=>{ pointerActive = false; }, {passive:true});
+  chart.addEventListener('pointercancel', (ev)=>{ pointerActive = false; hoverIndex = null; clearHoverMeta(); }, {passive:true});
 
-  chart.addEventListener('pointerleave', ()=>{ pointerActive=false; hoverIndex = null; hideTooltip(); clearOverlay(); hideChartGuide(); });
+  chart.addEventListener('pointerleave', ()=>{ pointerActive=false; hoverIndex = null; clearHoverMeta(); clearOverlay(); hideChartGuide(); });
 
 
   function updateChartAnchors(){
@@ -1729,56 +1821,52 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     try{ updateChartAnchors(); }catch{}
     updateHints();
 
-  const sym = SYMBOLS[_selected_idx];
-  const series = chart_series[sym]||[];
-  const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24h';
-  // update legend with prev / current / next period previews
-  try{
-    const legend = document.getElementById('chartLegend');
-    if(legend){
-      // Subsections
-      const tokenEl = document.getElementById('chartToken');
-      const periodsEl = document.getElementById('chartPeriods');
-      const granEl = document.getElementById('chartGranularity');
-      const axisEl = document.getElementById('chartAxis');
-
-      // Token (left)
-      if(tokenEl) tokenEl.textContent = sym;
-
-      // Periods (center-left): render all available periods as clickable items
-      const iv = getChartInterval();
-      if(periodsEl){
-        // Only rebuild the periods items if the selected index changed or we haven't rendered them yet
-        if(LAST_CHART_PERIODS_IDX === null || LAST_CHART_PERIODS_IDX !== CHART_LOOKBACK_IDX){
-          periodsEl.innerHTML = LOOKBACKS_CHART.map(([lb,secs], idx)=>{
-            const sel = (idx === CHART_LOOKBACK_IDX) ? ' selected' : '';
-            return `<span role="button" tabindex="0" class="muted legend-period-item${sel}" data-idx="${idx}" title="Switch to ${lb}">${lb}</span>`;
-          }).join('');
-
-          // attach handlers
-          const items = Array.from(periodsEl.querySelectorAll('.legend-period-item'));
-          items.forEach(it=>{
-            it.style.cursor = 'pointer';
-            it.addEventListener('click', async ()=>{
-              const idx = Number(it.dataset.idx);
-              if(idx === CHART_LOOKBACK_IDX) return; // no-op
-              CHART_LOOKBACK_IDX = idx;
-              try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; /* defer draw until data arrives */ } }catch(e){}
-              try{ savePersisted(); }catch(e){}
-            });
-            it.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); it.click(); } });
-          });
-          LAST_CHART_PERIODS_IDX = CHART_LOOKBACK_IDX;
+    const sym = SYMBOLS[_selected_idx];
+    const series = chart_series[sym]||[];
+  const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24H';
+    // Update meta header (token, price, change, periods, granularity, axis)
+    try{
+      if(chartMetaToken) chartMetaToken.textContent = sym;
+      // Do not overwrite price/change while hover is active (they are set by hover handlers)
+      if(!_hoverActive){
+        if(chartMetaPrice) chartMetaPrice.textContent = fmtMid(sym, latest_mid[sym]);
+        if(chartMetaChange){
+          const base = baselines[sym] ? baselines[sym][lbLabel] : null;
+          const mid = latest_mid[sym];
+          const p = pctChange(mid, base);
+          chartMetaChange.textContent = '—';
+          chartMetaChange.classList.remove('pos','neg');
+          if(p!=null){
+            const arrow = p>0 ? '▲' : (p<0 ? '▼' : '');
+            chartMetaChange.textContent = `${arrow} ${p>=0?'+':''}${p.toFixed(2)}%`;
+            chartMetaChange.classList.add(p>=0?'pos':'neg');
+          }
         }
       }
-
-      // Granularity (center-right)
-      if(granEl){ granEl.textContent = `Granularity — ${iv}`; }
-
-      // Axis (right): populated by renderAxis() below (but set now for initial state)
-      if(axisEl){ axisEl.textContent = `${fmtTs(computeAxisRange()[0], { showDate: true })}  —  ${fmtTs(computeAxisRange()[1], { showDate: true })}`; }
-    }
-  }catch(e){}
+  if(!_hoverActive && hoverWrapEl){ hoverWrapEl.style.opacity='0'; setTimeout(()=>{ if(!_hoverActive) hoverWrapEl.style.display='none'; }, 120); }
+  // Periods (rebuild only when index changes)
+  const periodsEl = document.getElementById('chartPeriods');
+  const axisEl = document.getElementById('chartAxis');
+  const iv = getChartInterval();
+      if(periodsEl && (LAST_CHART_PERIODS_IDX === null || LAST_CHART_PERIODS_IDX !== CHART_LOOKBACK_IDX)){
+        periodsEl.innerHTML = LOOKBACKS_CHART.map(([lb,secs], idx)=>{
+          const sel = (idx === CHART_LOOKBACK_IDX) ? ' selected' : '';
+          return `<span role="button" tabindex="0" class="meta-period-item${sel}" data-idx="${idx}" title="Switch to ${lb}">${lb}</span>`;
+        }).join('');
+        const items = Array.from(periodsEl.querySelectorAll('.meta-period-item'));
+        items.forEach(it=>{
+          it.addEventListener('click', async ()=>{
+            const idx = Number(it.dataset.idx); if(idx === CHART_LOOKBACK_IDX) return;
+            CHART_LOOKBACK_IDX = idx;
+            try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
+            try{ savePersisted(); }catch(e){}
+          });
+          it.addEventListener('keydown', ev=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); it.click(); } });
+        });
+        LAST_CHART_PERIODS_IDX = CHART_LOOKBACK_IDX;
+      }
+      if(axisEl) axisEl.textContent = `${fmtTs(computeAxisRange()[0], { showDate: true })}  —  ${fmtTs(computeAxisRange()[1], { showDate: true })}`;
+    }catch(e){}
 
   sizeCanvas();
   // clear overlay before full redraw so overlay doesn't persist
@@ -1940,7 +2028,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   function getChartInterval(){
   // Use unified lookup (same for line and candle) so the data spread matches
   ensureChartIdx();
-  const lb = LOOKBACKS_CHART[CHART_LOOKBACK_IDX] ? LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0] : '24h';
+  const lb = LOOKBACKS_CHART[CHART_LOOKBACK_IDX] ? LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0] : '24H';
   const mapped = INTERVAL_FOR_LOOKBACK[lb];
   if(mapped) return mapped;
   return CHART_MODE === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
@@ -2120,6 +2208,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
                 if (latest_mid[s] != null) updateLiveTail(s);
               }
             }
+            // Update meta header immediately for the currently selected symbol
+            try{ updateMetaHeaderLive(SYMBOLS[_selected_idx]); }catch(e){}
             _changed = true;
           }
         }
@@ -2239,6 +2329,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(e.key==="v"||e.key==="V"){ e.preventDefault();
   // toggle between line and candle modes
   CHART_MODE = (CHART_MODE === 'line') ? 'candle' : 'line';
+    document.body.classList.toggle('line-mode', CHART_MODE === 'line');
   // refresh chart data using appropriate interval (debounced)
     try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
   try{ savePersisted(); }catch(e){}
@@ -2311,6 +2402,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   try{ loadPersisted(); }catch(e){}
   try{ ensureChartIdx(); }catch(e){}
   applyTheme();
+  // Apply initial chart mode class for line-mode specific styling
+  document.body.classList.toggle('line-mode', CHART_MODE === 'line');
   buildTableHeader();
     hydrateTable();
     connectWs();
