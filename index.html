@@ -90,6 +90,10 @@
   body.line-mode #hoverGrid{ display:none !important; }
   body.line-mode #chartMetaHover{ align-items:flex-end; }
   body.line-mode .hg-label, body.line-mode .hg-val{ display:none !important; }
+  /* Mobile: tighten hover grid column gap for OHLC */
+  @media (max-width: 899px), (hover: none) and (pointer: coarse) {
+    #hoverGrid{ column-gap:12px !important; }
+  }
   @media (max-height:780px){ body{ align-items:flex-start; } }
 
   /* Outer container: fixed gutters vs viewport and a max content width */
@@ -1764,7 +1768,23 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   // Support touch/pen: show tooltip immediately on pointerdown (tap), keep it until pointerup/cancel
   chart.addEventListener('pointerdown', (ev)=>{
     pointerActive = true;
-    try{ _processPointerEvent(ev); }catch(e){}
+    try{
+      // Immediately process hover meta and force guide positioning on tap (mobile)
+      _processPointerEvent(ev);
+      try{
+        const sym = SYMBOLS[_selected_idx];
+        let npt = null;
+        if(CHART_MODE === 'candle') npt = hitTestCandle(ev.clientX, ev.clientY) || findNearestPoint(ev.clientX, ev.clientY);
+        else npt = findNearestPoint(ev.clientX, ev.clientY);
+        if(npt && typeof npt.idx === 'number'){
+          const c = canvasToDataCoord(ev.clientX, ev.clientY);
+          const n = (CHART_MODE === 'candle') ? (chart_candles[sym]||[]).length : (chart_series[sym]||[]).length;
+          const useCached = (cachedXs && cachedXs.length === n);
+          const gx = useCached ? cachedXs[npt.idx] : (c.padL + (n>1 ? (npt.idx/(n-1))*c.iw : c.iw/2));
+          positionChartGuideByCssX(gx, c.padT, c.ih);
+        }
+      }catch(e){}
+    }catch(e){}
   }, {passive:true});
 
   chart.addEventListener('pointerup', (ev)=>{ pointerActive = false; }, {passive:true});
