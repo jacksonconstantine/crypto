@@ -251,6 +251,9 @@
   }
   #chartGuide.visible{ opacity:1; }
 
+  /* Ensure continuous pointer events on mobile (avoid browser pan swallowing moves) */
+  .chart-frame, canvas#chart{ touch-action:none; }
+
 
   /* Tooltip removed: hover data now lives persistently in meta header */
 
@@ -490,6 +493,8 @@
   .chart-meta-left .meta-price{
     font-size: calc(var(--base-font-size) + 10px);
   }
+  /* Tighter vertical spacing between token / price / % change */
+  .chart-meta-left{ gap: var(--space-4); /* was var(--stack-roomy)=var(--space-5)=10px */ }
 </style>
 <script id="touch-alias-script">(function(){
   // Add .touch to <html> on iPadOS and similar devices that support touch but
@@ -1789,6 +1794,16 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
   chart.addEventListener('pointerup', (ev)=>{ pointerActive = false; }, {passive:true});
   chart.addEventListener('pointercancel', (ev)=>{ pointerActive = false; hoverIndex = null; clearHoverMeta(); }, {passive:true});
+  // Adjust pointercancel to be less aggressive (keep guide briefly in case of minor interruptions)
+  chart.removeEventListener('pointercancel', ()=>{}); /* no-op safe guard */
+  chart.addEventListener('pointercancel', (ev)=>{
+    // Do not immediately clear guide; wait a short grace period to see if a new pointer stream starts
+    const grace = 120; // ms
+    pointerActive = false;
+    setTimeout(()=>{
+      if(!pointerActive){ hoverIndex = null; clearHoverMeta(); hideChartGuide(); }
+    }, grace);
+  }, {passive:true});
 
   chart.addEventListener('pointerleave', ()=>{ pointerActive=false; hoverIndex = null; clearHoverMeta(); clearOverlay(); hideChartGuide(); });
 
