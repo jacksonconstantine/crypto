@@ -581,6 +581,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           <div class="meta-token" id="chartMetaToken">BTC</div>
           <div class="meta-price" id="chartMetaPrice">—</div>
           <div class="meta-change" id="chartMetaChange">—</div>
+          <div class="meta-summary" id="chartMetaSummary">—</div>
         </div>
         <div class="chart-meta-right" id="chartMetaRight">
           <div class="meta-compare" id="chartMetaCompare" style="display:none;">Comparing: —</div>
@@ -871,6 +872,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         chartMetaChange.textContent = `${arrow} ${p>=0?'+':''}${p.toFixed(2)}%`;
         chartMetaChange.classList.add(p>=0?'pos':'neg');
       }
+      updateMetaSummary(selectedSym);
     }catch(e){}
   }
 
@@ -902,12 +904,12 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       '<col class="c-last" />'
     ];
     if(showAvgCol) baseCols.push('<col class="c-avg" />');
-    if(!QUIET_MODE) baseCols.push('<col class="c-ret group-sep" />');
+    baseCols.push('<col class="c-ret group-sep" />');
     if(showLiqCol){
       baseCols.push('<col class="c-liq" />');
       baseCols.push('<col class="c-buf" />');
     }
-    const lbCols = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
+    const lbCols = LOOKBACKS_TABLE.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
     colgroup.innerHTML = baseCols.join("") + lbCols;
 
     const lookbackTh = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
@@ -1987,6 +1989,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           }
         }
       }
+      updateMetaSummary(sym);
   if(!_hoverActive && hoverWrapEl){ hoverWrapEl.style.opacity='0'; setTimeout(()=>{ if(!_hoverActive) hoverWrapEl.style.display='none'; }, 120); }
   // Periods (rebuild only when index changes)
   const periodsEl = document.getElementById('chartPeriods');
@@ -2605,8 +2608,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   // toggle between line and candle modes
   CHART_MODE = (CHART_MODE === 'line') ? 'candle' : 'line';
     document.body.classList.toggle('line-mode', CHART_MODE === 'line');
-  // instant apply from cache (or derived window) before async refresh
-    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
+  // refresh chart data using appropriate interval (debounced)
     try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
       return;
@@ -2617,14 +2619,12 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     else if(e.key==="ArrowLeft"){ e.preventDefault();
       // move to previous lookback
   CHART_LOOKBACK_IDX = (CHART_LOOKBACK_IDX - 1 + LOOKBACKS_CHART.length) % LOOKBACKS_CHART.length;
-    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
     try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
     }
     else if(e.key==="ArrowRight"){ e.preventDefault();
       // move to next lookback
   CHART_LOOKBACK_IDX = (CHART_LOOKBACK_IDX + 1) % LOOKBACKS_CHART.length;
-    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
     try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
     }
