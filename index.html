@@ -581,6 +581,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           <div class="meta-token" id="chartMetaToken">BTC</div>
           <div class="meta-price" id="chartMetaPrice">—</div>
           <div class="meta-change" id="chartMetaChange">—</div>
+          <div class="meta-summary" id="chartMetaSummary">—</div>
         </div>
         <div class="chart-meta-right" id="chartMetaRight">
           <div class="meta-compare" id="chartMetaCompare" style="display:none;">Comparing: —</div>
@@ -869,6 +870,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         chartMetaChange.textContent = `${arrow} ${p>=0?'+':''}${p.toFixed(2)}%`;
         chartMetaChange.classList.add(p>=0?'pos':'neg');
       }
+      updateMetaSummary(selectedSym);
     }catch(e){}
   }
 
@@ -1985,6 +1987,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           }
         }
       }
+      updateMetaSummary(sym);
   if(!_hoverActive && hoverWrapEl){ hoverWrapEl.style.opacity='0'; setTimeout(()=>{ if(!_hoverActive) hoverWrapEl.style.display='none'; }, 120); }
   // Periods (rebuild only when index changes)
   const periodsEl = document.getElementById('chartPeriods');
