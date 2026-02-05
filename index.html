@@ -777,6 +777,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const chart_candles = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
   const hasSnapshot  = Object.fromEntries(SYMBOLS.map(s=>[s,false]));
   const pendingLive  = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const chart_cache_line = Object.fromEntries(SYMBOLS.map(s=>[s,{}]));
+  const chart_cache_candle = Object.fromEntries(SYMBOLS.map(s=>[s,{}]));
   const _last_price_value = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
   const _flash_until = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
   const _flash_dir   = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
@@ -2173,13 +2175,121 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     throw new Error("Unsupported interval: "+iv);
   }
 
+  function getChartIntervalForLookback(idx, mode = CHART_MODE){
+  const lb = LOOKBACKS_CHART[idx] ? LOOKBACKS_CHART[idx][0] : '24H';
+  const mapped = INTERVAL_FOR_LOOKBACK[lb];
+  if(mapped) return mapped;
+  return mode === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
+  }
+
   function getChartInterval(){
   // Use unified lookup (same for line and candle) so the data spread matches
   ensureChartIdx();
-  const lb = LOOKBACKS_CHART[CHART_LOOKBACK_IDX] ? LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0] : '24H';
-  const mapped = INTERVAL_FOR_LOOKBACK[lb];
-  if(mapped) return mapped;
-  return CHART_MODE === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
+  return getChartIntervalForLookback(CHART_LOOKBACK_IDX, CHART_MODE);
+  }
+
+  function cloneCandles(candles){ return (candles||[]).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c })); }
+
+  function writeChartCache(sym, idx, mode, times, series, candles){
+    const target = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    target[sym][idx] = {
+      times: (times || []).slice(),
+      series: (series || []).slice(),
+      candles: cloneCandles(candles || [])
+    };
+  }
+
+  function applyChartData(sym, times, series, candles){
+    chart_times[sym] = (times || []).slice();
+    chart_series[sym] = (series || []).slice();
+    chart_candles[sym] = cloneCandles(candles || []);
+    hasSnapshot[sym] = true;
+  }
+
+  function applyCachedLookback(idx, mode = CHART_MODE){
+    const source = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    let any = false;
+    for(const sym of SYMBOLS){
+      const entry = source[sym] && source[sym][idx];
+      if(!entry) continue;
+      applyChartData(sym, entry.times, entry.series, entry.candles);
+      any = true;
+    }
+    return any;
+  }
+
+  function applyDerivedLookbackFromCurrent(idx, mode = CHART_MODE){
+    const lbSecs = (LOOKBACKS_CHART[idx] && LOOKBACKS_CHART[idx][1]) || (24*60*60);
+    const cutoff = nowMs() - lbSecs*1000;
+    let any = false;
+    for(const sym of SYMBOLS){
+      const timesSrc = chart_times[sym] || [];
+      const seriesSrc = chart_series[sym] || [];
+      if(!timesSrc.length || !seriesSrc.length) continue;
+      let start = 0;
+      while(start < timesSrc.length && timesSrc[start] < cutoff) start++;
+      const times = timesSrc.slice(start);
+      const series = seriesSrc.slice(start);
+      if(!times.length || !series.length) continue;
+      let candles = [];
+      if(mode === 'candle'){
+        const candleSrc = chart_candles[sym] || [];
+        if(candleSrc.length){
+          candles = candleSrc.filter(c=>Number.isFinite(c.t) && c.t >= cutoff).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c }));
+        }
+        if(!candles.length){
+          candles = times.map((t,i)=>({ t, o:series[i], h:series[i], l:series[i], c:series[i] }));
+        }
+      } else {
+        const candleSrc = chart_candles[sym] || [];
+        candles = candleSrc.filter(c=>Number.isFinite(c.t) && c.t >= cutoff).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c }));
+      }
+      applyChartData(sym, times, series, candles);
+      any = true;
+    }
+    return any;
+  }
+
+  async function prefetchLookback(idx, mode = CHART_MODE){
+    if(idx < 0 || idx >= LOOKBACKS_CHART.length) return;
+    const source = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    if(SYMBOLS.every(sym => source[sym] && source[sym][idx])) return;
+    const endMs = nowMs();
+    const lookbackSecs = (LOOKBACKS_CHART[idx] && LOOKBACKS_CHART[idx][1]) || (24*60*60);
+    const startMs = endMs - lookbackSecs*1000;
+    const interval = getChartIntervalForLookback(idx, mode);
+    const results = await Promise.all(SYMBOLS.map(sym => fetchCandles(sym, interval, startMs, endMs).catch(()=>[])));
+    results.forEach((data, i)=>{
+      const sym = SYMBOLS[i];
+      const times = [], series = [], candles = [];
+      if(Array.isArray(data)){
+        for(const c of data){
+          try{
+            let ts, open, high, low, close;
+            if (c && typeof c === 'object' && !Array.isArray(c)) {
+              ts = +(c.t ?? c.startTime ?? c[0]);
+              open = +(c.o ?? c.open ?? c[1]);
+              high = +(c.h ?? c.high ?? c[2]);
+              low = +(c.l ?? c.low ?? c[3]);
+              close = +(c.c ?? c.close ?? c[4]);
+            } else if (Array.isArray(c)) {
+              ts = +c[0]; open = +c[1]; high = +c[2]; low = +c[3]; close = +c[4];
+            }
+            if (Number.isFinite(ts)) {
+              const tms = toMs(ts);
+              times.push(tms); series.push(close);
+              candles.push({ t:tms, o:open, h:high, l:low, c:close });
+            }
+          }catch{}
+        }
+      }
+      writeChartCache(sym, idx, mode, times, series, candles);
+    });
+  }
+
+  function prefetchAdjacentLookbacks(){
+    const targets = [CHART_LOOKBACK_IDX - 1, CHART_LOOKBACK_IDX + 1].filter(i=>i>=0 && i<LOOKBACKS_CHART.length);
+    targets.forEach(i => { prefetchLookback(i, CHART_MODE).catch(()=>{}); });
   }
 
   async function postInfo(payload){
@@ -2234,11 +2344,13 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const reqId = Math.random().toString(36).slice(2);
   refreshAllCharts.__lastReq = reqId;
   ensureChartIdx();
+  const targetIdx = CHART_LOOKBACK_IDX;
+  const targetMode = CHART_MODE;
   const endMs  = nowMs();
-  const lookbackSecs = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][1]) || (24*60*60);
+  const lookbackSecs = (LOOKBACKS_CHART[targetIdx] && LOOKBACKS_CHART[targetIdx][1]) || (24*60*60);
   const startMs= endMs - lookbackSecs*1000;
 
-    const interval = getChartInterval();
+    const interval = getChartIntervalForLookback(targetIdx, targetMode);
     const results = await Promise.all(
       SYMBOLS.map(sym => fetchCandles(sym, interval, startMs, endMs).catch(()=>[]))
     );
@@ -2275,10 +2387,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         }
       }
 
-      chart_series[sym] = series;
-      chart_times[sym]  = times;
-      chart_candles[sym] = candles;
-      hasSnapshot[sym] = true;
+      applyChartData(sym, times, series, candles);
+      writeChartCache(sym, targetIdx, targetMode, times, series, candles);
 
       // apply any buffered live point captured before the snapshot
       const pending = pendingLive[sym];
@@ -2302,6 +2412,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     });
 
     _changed = true;
+    prefetchAdjacentLookbacks();
     if(AXIS_DEBUG) console.debug('refreshAllCharts done', {now: nowMs(), selected: SYMBOLS[_selected_idx], hasSnapshot});
     renderAxis(); // sync the label immediately
   }
