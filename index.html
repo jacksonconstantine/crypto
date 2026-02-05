@@ -216,7 +216,7 @@
   .chart-meta-left .meta-token{ font-weight:500; letter-spacing:.5px; }
   .chart-meta-left .meta-price{ font-weight:500; line-height:1.2; }
   .chart-meta-left .meta-change{ font-weight:500; }
-  .chart-meta-left .meta-summary{ font-size:calc(var(--base-font-size) - 1px); color:var(--muted); letter-spacing:.2px; }
+  .chart-meta-right .meta-compare{ font-size:calc(var(--base-font-size) - 1px); color:var(--muted); letter-spacing:.2px; min-height:1.2em; }
   .chart-meta-right .meta-periods{ display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
   .chart-meta-right .meta-granularity, .chart-meta-right .meta-axis{ color:var(--fg); }
   .meta-period-item{ padding:5px 10px; border-radius:8px; background:transparent; color:var(--fg); cursor:pointer; border:1px solid transparent; }
@@ -584,6 +584,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           <div class="meta-summary" id="chartMetaSummary">—</div>
         </div>
         <div class="chart-meta-right" id="chartMetaRight">
+          <div class="meta-compare" id="chartMetaCompare" style="display:none;">Comparing: —</div>
           <div class="meta-hover" id="chartMetaHover" style="display:none; flex-direction:column; align-items:flex-end; gap:var(--stack-roomy); opacity:0; transition:opacity .12s ease;">
             <div class="hover-time" id="hoverTime" style="font-size:calc(var(--base-font-size) - 1px); opacity:.85;">&nbsp;</div>
             <div class="hover-grid" id="hoverGrid" style="display:grid; grid-template-columns: repeat(4, auto); grid-template-rows: repeat(2, auto); column-gap:22px; row-gap:var(--stack-roomy); align-items:center;">
@@ -797,7 +798,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const chartMetaToken = document.getElementById('chartMetaToken');
   const chartMetaPrice = document.getElementById('chartMetaPrice');
   const chartMetaChange= document.getElementById('chartMetaChange');
-  const chartMetaSummary = document.getElementById('chartMetaSummary');
+  const chartMetaCompare = document.getElementById('chartMetaCompare');
   const hintSwitch = document.getElementById("hintSwitch");
   const ctx = chart.getContext("2d");
   const overlay = document.getElementById('chartOverlay');
@@ -849,39 +850,6 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const fmtMid=(sym,v)=>v==null?"":formatWithSpec(v, SYMBOL_FORMAT[sym]??DEFAULT_NUM_FORMAT);
   const fmtAvg=(sym,avg)=>avg==null?"—":formatWithSpec(avg, (MY_AVG_FORMAT||SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT));
   const pctChange=(nv,ov)=> (nv==null||ov==null||ov===0) ? null : (nv-ov)/ov*100;
-  function computeLookbackSummary(sym){
-    const candles = chart_candles[sym] || [];
-    const series = chart_series[sym] || [];
-    let high = null, low = null, first = null, last = null;
-    if(CHART_MODE === 'candle' && candles.length){
-      high = Math.max(...candles.map(c=>c.h));
-      low = Math.min(...candles.map(c=>c.l));
-      first = candles[0]?.o ?? candles[0]?.c;
-      last = candles[candles.length - 1]?.c;
-    } else if(series.length){
-      high = Math.max(...series);
-      low = Math.min(...series);
-      first = series[0];
-      last = series[series.length - 1];
-    }
-    if(high == null || low == null || first == null || last == null) return null;
-    return { high, low, net: pctChange(last, first) };
-  }
-  function updateMetaSummary(sym){
-    if(!chartMetaSummary) return;
-    const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24H';
-    const summary = computeLookbackSummary(sym);
-    if(!summary){
-      chartMetaSummary.textContent = '—';
-      return;
-    }
-    const spec = SYMBOL_FORMAT[sym] || DEFAULT_NUM_FORMAT;
-    const highTxt = formatWithSpec(summary.high, spec) || '—';
-    const lowTxt = formatWithSpec(summary.low, spec) || '—';
-    const netTxt = summary.net != null ? `${summary.net >= 0 ? '+' : ''}${summary.net.toFixed(2)}%` : '—';
-    chartMetaSummary.textContent = `${lbLabel} H/L ${highTxt}/${lowTxt} • ${netTxt}`;
-  }
-
   // Live meta header updater (price + percentage) without full redraw
   function updateMetaHeaderLive(sym){
     try{
@@ -942,14 +910,14 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const lbCols = LOOKBACKS_TABLE.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
     colgroup.innerHTML = baseCols.join("") + lbCols;
 
-    const lookbackTh = LOOKBACKS_TABLE.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
+    const lookbackTh = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
     theadEl.innerHTML = `
       <tr>
         <th class="h-coin">COIN</th>
         <th class="num h-price">PRICE</th>
         <th class="num h-last">LAST</th>
         ${showAvgCol ? '<th class="num h-avg">AVG</th>' : ''}
-        <th class="num h-ret">RET%</th>
+        ${QUIET_MODE ? "" : "<th class=\"num h-ret\">RET%</th>"}
         ${showLiqCol ? '<th class="num h-liq">LIQ</th><th class="num h-buf">BUF%</th>' : ''}
         ${lookbackTh}
       </tr>`;
@@ -1002,14 +970,14 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     const showAvgCol = SHOW_MY_AVG && !QUIET_MODE;
     const showLiqCol = SHOW_LIQ && !QUIET_MODE;
     const rows = SYMBOLS.map(sym=>{
-      const lbTds = LOOKBACKS_TABLE.map(([lb],i)=>`<td class="num lb-${lb} ${i===0?'group-sep':''}">—</td>`).join("");
+      const lbTds = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb],i)=>`<td class="num lb-${lb} ${i===0?'group-sep':''}">—</td>`).join("");
       return `
         <tr data-sym="${sym}">
           <td class="coin"><span class="sel-dot"></span><span class="stale-dot" aria-hidden="true"></span><span>${sym}</span></td>
           <td class="num c-price"></td>
           <td class="num c-last muted">—</td>
           ${showAvgCol ? '<td class="num c-avg">—</td>' : ''}
-          <td class="num c-ret">—</td>
+          ${QUIET_MODE ? "" : "<td class=\"num c-ret\">—</td>"}
           ${showLiqCol ? '<td class="num c-liq">—</td><td class="num c-buf">—</td>' : ''}
           ${lbTds}
         </tr>`;
@@ -1108,7 +1076,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     tr.classList.toggle('row-stale', last != null && (nowMs() - last) > STALE_MS);
 
     const avgTd  = tr.querySelector("td.c-avg"); if(avgTd) avgTd.textContent = fmtAvg(sym, avg);
-    const retTd  = tr.querySelector("td.c-ret");
+    const retTd  = QUIET_MODE ? null : tr.querySelector("td.c-ret");
     if(retTd){
       retTd.textContent = "—";
       retTd.classList.remove("pos","neg");
@@ -1125,7 +1093,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       }
     }
 
-  for(const [lb,] of LOOKBACKS_TABLE){
+  if(!QUIET_MODE) for(const [lb,] of LOOKBACKS_TABLE){
       const td = tr.querySelector(`td.lb-${lb}`);
       if(!td) continue;
       const base = baselines[sym][lb];
@@ -1930,6 +1898,19 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     return SYMBOLS[(_selected_idx + 1) % SYMBOLS.length];
   }
 
+
+  function updateCompareMeta(sym){
+    if(!chartMetaCompare) return;
+    const compareSym = getCompareSym();
+    if(COMPARE_ACTIVE && compareSym && compareSym !== sym){
+      chartMetaCompare.style.display = '';
+      chartMetaCompare.textContent = `Comparing: ${compareSym}`;
+    } else {
+      chartMetaCompare.style.display = 'none';
+      chartMetaCompare.textContent = 'Comparing: —';
+    }
+  }
+
   function drawCompareLine(sym, padL, padT, iw, ih, minV, maxV){
     const compareSym = getCompareSym();
     if(!compareSym || compareSym === sym) return;
@@ -1984,6 +1965,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     updateHints();
 
     const sym = SYMBOLS[_selected_idx];
+    updateCompareMeta(sym);
     const series = chart_series[sym]||[];
   const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24H';
     // Update meta header (token, price, change, periods, granularity, axis)
@@ -2334,8 +2316,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   }
 
   // Show loading state in legend while a refresh is in flight
+  let CHART_REFRESH_PENDING = false;
   async function refreshAllChartsWithLoading({ showOverlay = true } = {}){
-    if(CHART_REFRESH_INFLIGHT) return;
+    if(CHART_REFRESH_INFLIGHT){ CHART_REFRESH_PENDING = true; return; }
     CHART_REFRESH_INFLIGHT = true;
     // Show loading overlay and a loading state in the periods subsection without removing the canvas
     const periodsEl = document.getElementById('chartPeriods');
@@ -2347,9 +2330,13 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     CHART_REFRESH_INFLIGHT = false;
     // drawChart will rebuild/populate subsections and redraw
     drawChart();
+    if(CHART_REFRESH_PENDING){
+      CHART_REFRESH_PENDING = false;
+      debouncedRefreshCharts({ showOverlay: false });
+    }
   }
 
-  const debouncedRefreshCharts = debounce(refreshAllChartsWithLoading, 240);
+  const debouncedRefreshCharts = debounce(refreshAllChartsWithLoading, 80);
   function requestChartRefresh({ drawNow = true, showOverlay = true } = {}){
     if(drawNow){ try{ drawChart(); }catch(e){} }
     if(SHOW_CHART){
