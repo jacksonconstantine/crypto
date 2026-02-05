@@ -168,6 +168,8 @@
   .sel-dot{ width:7px; height:7px; border-radius:999px; background:var(--accent); opacity:.9; visibility:hidden; }
   .row-selected .sel-dot{ visibility:visible; }
   body.chart-off .sel-dot{ display:none !important; }
+  .stale-dot{ width:6px; height:6px; border-radius:999px; background:var(--muted); opacity:0; transition:opacity .12s ease; }
+  .row-stale .stale-dot{ opacity:.7; }
 
   .muted{ color:var(--fg); }
   .pos{ color:var(--pos); } .neg{ color:var(--neg); }
@@ -214,6 +216,7 @@
   .chart-meta-left .meta-token{ font-weight:500; letter-spacing:.5px; }
   .chart-meta-left .meta-price{ font-weight:500; line-height:1.2; }
   .chart-meta-left .meta-change{ font-weight:500; }
+  .chart-meta-right .meta-compare{ font-size:calc(var(--base-font-size) - 1px); color:var(--muted); letter-spacing:.2px; min-height:1.2em; }
   .chart-meta-right .meta-periods{ display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
   .chart-meta-right .meta-granularity, .chart-meta-right .meta-axis{ color:var(--fg); }
   .meta-period-item{ padding:5px 10px; border-radius:8px; background:transparent; color:var(--fg); cursor:pointer; border:1px solid transparent; }
@@ -580,6 +583,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           <div class="meta-change" id="chartMetaChange">—</div>
         </div>
         <div class="chart-meta-right" id="chartMetaRight">
+          <div class="meta-compare" id="chartMetaCompare" style="display:none;">Comparing: —</div>
           <div class="meta-hover" id="chartMetaHover" style="display:none; flex-direction:column; align-items:flex-end; gap:var(--stack-roomy); opacity:0; transition:opacity .12s ease;">
             <div class="hover-time" id="hoverTime" style="font-size:calc(var(--base-font-size) - 1px); opacity:.85;">&nbsp;</div>
             <div class="hover-grid" id="hoverGrid" style="display:grid; grid-template-columns: repeat(4, auto); grid-template-rows: repeat(2, auto); column-gap:22px; row-gap:var(--stack-roomy); align-items:center;">
@@ -627,9 +631,11 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       <div class="hint">
   <span id="hintSwitch"><span class="kbd">↑/↓</span> switch coin</span>
   <span><span class="kbd">←/→</span> change period</span>
-        <span><span class="kbd">c</span> show/hide chart</span>
+  <span><span class="kbd">c</span> show/hide chart</span>
   <span><span class="kbd">v</span> toggle line/candle</span>
+  <span><span class="kbd">⇧</span> compare</span>
   <span><span class="kbd">e</span> edit coins</span>
+  <span><span class="kbd">i</span> quiet mode</span>
   <span><span class="kbd">t</span> toggle light/dark</span>
       </div>
     </div>
@@ -646,6 +652,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const LOWPOWER = true;
   const DPR_MAX = Math.min(2, window.devicePixelRatio || 1);
   const RENDER_MIN_INTERVAL = LOWPOWER ? 250 : 150;
+  const HIDE_CHART_WHILE_LOADING = false;
 
   const WS_URL = "wss://api.hyperliquid.xyz/ws";
   const INFO_URL = "https://api.hyperliquid.xyz/info";
@@ -694,6 +701,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const STRIP_LEADING_ZERO = true;
 
   let SHOW_CHART = true;
+  let QUIET_MODE = false;
+  let COMPARE_ACTIVE = false;
+  const STALE_MS = 15000;
   const CHART_INTERVAL = "1m";
   // Chart display mode: 'line' or 'candle'
   let CHART_MODE = 'candle';
@@ -720,12 +730,15 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       if(obj.fmt && typeof obj.fmt === 'object') Object.assign(SYMBOL_FORMAT, obj.fmt);
     if(obj.chartMode && (obj.chartMode === 'line' || obj.chartMode === 'candle')) CHART_MODE = obj.chartMode;
     if(obj.theme && (obj.theme === 'light' || obj.theme === 'dark')) THEME = obj.theme;
-  if(typeof obj.chartLookbackIdx === 'number') CHART_LOOKBACK_IDX = Math.max(0, Math.min(LOOKBACKS_CHART.length-1, obj.chartLookbackIdx));
+    if(typeof obj.chartLookbackIdx === 'number') CHART_LOOKBACK_IDX = Math.max(0, Math.min(LOOKBACKS_CHART.length-1, obj.chartLookbackIdx));
+    if(typeof obj.selectedIdx === 'number') _selected_idx = Math.max(0, Math.min(SYMBOLS.length - 1, obj.selectedIdx));
+    if(typeof obj.showChart === 'boolean') SHOW_CHART = obj.showChart;
+    if(typeof obj.quietMode === 'boolean') QUIET_MODE = obj.quietMode;
     }catch(e){ console.debug('loadPersisted failed', e); }
   }
   function savePersisted(){
     try{
-  const payload = { symbols: SYMBOLS, avg: MY_AVG_PRICE, liq: MY_LIQ_PRICE, fmt: SYMBOL_FORMAT, chartMode: CHART_MODE, chartLookbackIdx: CHART_LOOKBACK_IDX, theme: THEME };
+  const payload = { symbols: SYMBOLS, avg: MY_AVG_PRICE, liq: MY_LIQ_PRICE, fmt: SYMBOL_FORMAT, chartMode: CHART_MODE, chartLookbackIdx: CHART_LOOKBACK_IDX, theme: THEME, selectedIdx: _selected_idx, showChart: SHOW_CHART, quietMode: QUIET_MODE };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     }catch(e){ console.debug('savePersisted failed', e); }
   }
@@ -738,6 +751,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     if(!Array.isArray(LOOKBACKS_CHART) || LOOKBACKS_CHART.length===0){ CHART_LOOKBACK_IDX = 0; return; }
     if(typeof CHART_LOOKBACK_IDX !== 'number' || !Number.isFinite(CHART_LOOKBACK_IDX)) CHART_LOOKBACK_IDX = 0;
     CHART_LOOKBACK_IDX = Math.max(0, Math.min(LOOKBACKS_CHART.length - 1, CHART_LOOKBACK_IDX));
+  }
+  function clampSelectedIdx(){
+    if(typeof _selected_idx !== 'number' || !Number.isFinite(_selected_idx)) _selected_idx = 0;
+    _selected_idx = Math.max(0, Math.min(SYMBOLS.length - 1, _selected_idx));
   }
 
   const HEARTBEAT_SECONDS = 30;
@@ -759,6 +776,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const chart_candles = Object.fromEntries(SYMBOLS.map(s=>[s,[]]));
   const hasSnapshot  = Object.fromEntries(SYMBOLS.map(s=>[s,false]));
   const pendingLive  = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
+  const chart_cache_line = Object.fromEntries(SYMBOLS.map(s=>[s,{}]));
+  const chart_cache_candle = Object.fromEntries(SYMBOLS.map(s=>[s,{}]));
   const _last_price_value = Object.fromEntries(SYMBOLS.map(s=>[s,null]));
   const _flash_until = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
   const _flash_dir   = Object.fromEntries(SYMBOLS.map(s=>[s,0]));
@@ -768,6 +787,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   let _lastRowPickAt = 0;
   // Track last rendered periods index to avoid rebuilding the periods DOM on every draw
   let LAST_CHART_PERIODS_IDX = null;
+  let CHART_REFRESH_INFLIGHT = false;
 
   /* ---------- ELEMENTS ---------- */
   const theadEl = document.getElementById("thead");
@@ -779,6 +799,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const chartMetaToken = document.getElementById('chartMetaToken');
   const chartMetaPrice = document.getElementById('chartMetaPrice');
   const chartMetaChange= document.getElementById('chartMetaChange');
+  const chartMetaCompare = document.getElementById('chartMetaCompare');
   const hintSwitch = document.getElementById("hintSwitch");
   const ctx = chart.getContext("2d");
   const overlay = document.getElementById('chartOverlay');
@@ -830,7 +851,6 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const fmtMid=(sym,v)=>v==null?"":formatWithSpec(v, SYMBOL_FORMAT[sym]??DEFAULT_NUM_FORMAT);
   const fmtAvg=(sym,avg)=>avg==null?"—":formatWithSpec(avg, (MY_AVG_FORMAT||SYMBOL_FORMAT[sym]||DEFAULT_NUM_FORMAT));
   const pctChange=(nv,ov)=> (nv==null||ov==null||ov===0) ? null : (nv-ov)/ov*100;
-
   // Live meta header updater (price + percentage) without full redraw
   function updateMetaHeaderLive(sym){
     try{
@@ -874,19 +894,31 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   /* ---------- TABLE ---------- */
   function buildTableHeader(){
     const colgroup = document.querySelector('table.data colgroup');
-  const lbCols = LOOKBACKS_TABLE.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
-    colgroup.insertAdjacentHTML("beforeend", lbCols);
+    const showAvgCol = SHOW_MY_AVG && !QUIET_MODE;
+    const showLiqCol = SHOW_LIQ && !QUIET_MODE;
+    const baseCols = [
+      '<col class="c-coin" />',
+      '<col class="c-price" />',
+      '<col class="c-last" />'
+    ];
+    if(showAvgCol) baseCols.push('<col class="c-avg" />');
+    if(!QUIET_MODE) baseCols.push('<col class="c-ret group-sep" />');
+    if(showLiqCol){
+      baseCols.push('<col class="c-liq" />');
+      baseCols.push('<col class="c-buf" />');
+    }
+    const lbCols = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb])=>`<col class="c-lb lb-${lb}" />`).join("");
+    colgroup.innerHTML = baseCols.join("") + lbCols;
 
-  const lookbackTh = LOOKBACKS_TABLE.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
+    const lookbackTh = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb],i)=>`<th class="num lb-${lb} ${i===0?'group-sep':''}">${lb}</th>`).join("");
     theadEl.innerHTML = `
       <tr>
         <th class="h-coin">COIN</th>
         <th class="num h-price">PRICE</th>
         <th class="num h-last">LAST</th>
-        <th class="num h-avg">AVG</th>
-        <th class="num h-ret">RET%</th>
-        <th class="num h-liq">LIQ</th>
-        <th class="num h-buf">BUF%</th>
+        ${showAvgCol ? '<th class="num h-avg">AVG</th>' : ''}
+        ${QUIET_MODE ? "" : "<th class=\"num h-ret\">RET%</th>"}
+        ${showLiqCol ? '<th class="num h-liq">LIQ</th><th class="num h-buf">BUF%</th>' : ''}
         ${lookbackTh}
       </tr>`;
     try{ updateColumnWidths(); }catch(e){}
@@ -935,17 +967,18 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   }
 
   function hydrateTable(){
+    const showAvgCol = SHOW_MY_AVG && !QUIET_MODE;
+    const showLiqCol = SHOW_LIQ && !QUIET_MODE;
     const rows = SYMBOLS.map(sym=>{
-  const lbTds = LOOKBACKS_TABLE.map(([lb],i)=>`<td class="num lb-${lb} ${i===0?'group-sep':''}">—</td>`).join("");
+      const lbTds = QUIET_MODE ? "" : LOOKBACKS_TABLE.map(([lb],i)=>`<td class="num lb-${lb} ${i===0?'group-sep':''}">—</td>`).join("");
       return `
         <tr data-sym="${sym}">
-          <td class="coin"><span class="sel-dot"></span><span>${sym}</span></td>
+          <td class="coin"><span class="sel-dot"></span><span class="stale-dot" aria-hidden="true"></span><span>${sym}</span></td>
           <td class="num c-price"></td>
           <td class="num c-last muted">—</td>
-          <td class="num c-avg">—</td>
-          <td class="num c-ret">—</td>
-          <td class="num c-liq">—</td>
-          <td class="num c-buf">—</td>
+          ${showAvgCol ? '<td class="num c-avg">—</td>' : ''}
+          ${QUIET_MODE ? "" : "<td class=\"num c-ret\">—</td>"}
+          ${showLiqCol ? '<td class="num c-liq">—</td><td class="num c-buf">—</td>' : ''}
           ${lbTds}
         </tr>`;
     }).join("");
@@ -1040,9 +1073,10 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
 
     const lastTd = tr.querySelector("td.c-last");
     if(lastTd) lastTd.textContent = fmtAgeMs(last);
+    tr.classList.toggle('row-stale', last != null && (nowMs() - last) > STALE_MS);
 
     const avgTd  = tr.querySelector("td.c-avg"); if(avgTd) avgTd.textContent = fmtAvg(sym, avg);
-    const retTd  = tr.querySelector("td.c-ret");
+    const retTd  = QUIET_MODE ? null : tr.querySelector("td.c-ret");
     if(retTd){
       retTd.textContent = "—";
       retTd.classList.remove("pos","neg");
@@ -1059,7 +1093,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       }
     }
 
-  for(const [lb,] of LOOKBACKS_TABLE){
+  if(!QUIET_MODE) for(const [lb,] of LOOKBACKS_TABLE){
       const td = tr.querySelector(`td.lb-${lb}`);
       if(!td) continue;
       const base = baselines[sym][lb];
@@ -1076,6 +1110,15 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     SYMBOLS.forEach(updateRow);
   }
 
+  function rebuildTable(){
+    _hydrated = false;
+    buildTableHeader();
+    hydrateTable();
+    updateTable();
+    try{ updateColumnWidths(); }catch(e){}
+    try{ updateChartAnchors(); drawChart(); }catch(e){}
+  }
+
   tbodyEl?.addEventListener("click", (e)=>{
     const now = performance.now();
     if (now - _lastRowPickAt < 250) return;
@@ -1088,6 +1131,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       _selected_idx = idx;
       updateSelectionDots();
       drawChart();
+      try{ savePersisted(); }catch(e){}
     }
   });
 
@@ -1150,7 +1194,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     hydrateTable();
     updateTable();
     try{ updateColumnWidths(); }catch{}
-    _selected_idx = 0;
+    clampSelectedIdx();
     updateSelectionDots();
     drawChart();
 
@@ -1849,10 +1893,61 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   // axis is now part of the legend and aligned via flex layout; no absolute positioning required
   }
 
+  function getCompareSym(){
+    if(!COMPARE_ACTIVE || SYMBOLS.length < 2) return null;
+    return SYMBOLS[(_selected_idx + 1) % SYMBOLS.length];
+  }
+
+
+  function updateCompareMeta(sym){
+    if(!chartMetaCompare) return;
+    const compareSym = getCompareSym();
+    if(COMPARE_ACTIVE && compareSym && compareSym !== sym){
+      chartMetaCompare.style.display = '';
+      chartMetaCompare.textContent = `Comparing: ${compareSym}`;
+    } else {
+      chartMetaCompare.style.display = 'none';
+      chartMetaCompare.textContent = 'Comparing: —';
+    }
+  }
+
+  function drawCompareLine(sym, padL, padT, iw, ih, minV, maxV){
+    const compareSym = getCompareSym();
+    if(!compareSym || compareSym === sym) return;
+    const primarySeries = CHART_MODE === 'candle'
+      ? (chart_candles[sym] || []).map(c=>c.c)
+      : (chart_series[sym] || []);
+    const compareSeries = CHART_MODE === 'candle'
+      ? (chart_candles[compareSym] || []).map(c=>c.c)
+      : (chart_series[compareSym] || []);
+    if(primarySeries.length < 2 || compareSeries.length < 2) return;
+    const primaryFirst = primarySeries[0];
+    const compareFirst = compareSeries[0];
+    if(!Number.isFinite(primaryFirst) || !Number.isFinite(compareFirst) || compareFirst === 0) return;
+    const scale = primaryFirst / compareFirst;
+    const n = Math.min(primarySeries.length, compareSeries.length);
+    const dpr = Math.max(1, DPR_MAX);
+    ctx.save();
+    ctx.beginPath();
+    for(let i=0;i<n;i++){
+      const scaled = compareSeries[i] * scale;
+      const px = padL + (n>1 ? (i/(n-1))*iw : iw/2);
+      const py = padT + (1 - (scaled-minV)/Math.max(1e-9, maxV-minV))*ih;
+      const ax = (Math.round(px * dpr) + 0.5) / dpr;
+      const ay = (Math.round(py * dpr) + 0.5) / dpr;
+      if(i===0) ctx.moveTo(ax, ay); else ctx.lineTo(ax, ay);
+    }
+    ctx.strokeStyle = 'rgba(170,183,196,0.7)';
+    ctx.setLineDash([4,4]);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawChart(){
     // If overlay is visible (loading), avoid rendering the previous chart contents to prevent showing stale data.
     const overlayNow = !!document.querySelector('.panel-chart .loading-overlay.visible');
-    if(overlayNow){
+    if(overlayNow && HIDE_CHART_WHILE_LOADING){
       // keep canvas intact but draw a neutral backdrop so the spinner is the only visible element
       const w = chart.clientWidth, h = chart.clientHeight;
       ctx.clearRect(0,0,w,h);
@@ -1870,6 +1965,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     updateHints();
 
     const sym = SYMBOLS[_selected_idx];
+    updateCompareMeta(sym);
     const series = chart_series[sym]||[];
   const lbLabel = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0]) || '24H';
     // Update meta header (token, price, change, periods, granularity, axis)
@@ -1906,7 +2002,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
           it.addEventListener('click', async ()=>{
             const idx = Number(it.dataset.idx); if(idx === CHART_LOOKBACK_IDX) return;
             CHART_LOOKBACK_IDX = idx;
-            try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
+            try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
             try{ savePersisted(); }catch(e){}
           });
           it.addEventListener('keydown', ev=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); it.click(); } });
@@ -2057,6 +2153,9 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
       // guide line is drawn on the overlay for instant responsiveness (avoid duplicate drawing here)
     }
 
+    // Compare overlay line (normalized to the selected symbol)
+    try{ drawCompareLine(sym, padL, padT, iw, ih, minV, maxV); }catch(e){}
+
     // If debugging, draw markers on main canvas to compare against overlay
     try{ drawMainDebugMarkers(); }catch(e){}
 
@@ -2073,13 +2172,121 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     throw new Error("Unsupported interval: "+iv);
   }
 
+  function getChartIntervalForLookback(idx, mode = CHART_MODE){
+  const lb = LOOKBACKS_CHART[idx] ? LOOKBACKS_CHART[idx][0] : '24H';
+  const mapped = INTERVAL_FOR_LOOKBACK[lb];
+  if(mapped) return mapped;
+  return mode === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
+  }
+
   function getChartInterval(){
   // Use unified lookup (same for line and candle) so the data spread matches
   ensureChartIdx();
-  const lb = LOOKBACKS_CHART[CHART_LOOKBACK_IDX] ? LOOKBACKS_CHART[CHART_LOOKBACK_IDX][0] : '24H';
-  const mapped = INTERVAL_FOR_LOOKBACK[lb];
-  if(mapped) return mapped;
-  return CHART_MODE === 'candle' ? CHART_CANDLE_INTERVAL : CHART_INTERVAL;
+  return getChartIntervalForLookback(CHART_LOOKBACK_IDX, CHART_MODE);
+  }
+
+  function cloneCandles(candles){ return (candles||[]).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c })); }
+
+  function writeChartCache(sym, idx, mode, times, series, candles){
+    const target = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    target[sym][idx] = {
+      times: (times || []).slice(),
+      series: (series || []).slice(),
+      candles: cloneCandles(candles || [])
+    };
+  }
+
+  function applyChartData(sym, times, series, candles){
+    chart_times[sym] = (times || []).slice();
+    chart_series[sym] = (series || []).slice();
+    chart_candles[sym] = cloneCandles(candles || []);
+    hasSnapshot[sym] = true;
+  }
+
+  function applyCachedLookback(idx, mode = CHART_MODE){
+    const source = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    let any = false;
+    for(const sym of SYMBOLS){
+      const entry = source[sym] && source[sym][idx];
+      if(!entry) continue;
+      applyChartData(sym, entry.times, entry.series, entry.candles);
+      any = true;
+    }
+    return any;
+  }
+
+  function applyDerivedLookbackFromCurrent(idx, mode = CHART_MODE){
+    const lbSecs = (LOOKBACKS_CHART[idx] && LOOKBACKS_CHART[idx][1]) || (24*60*60);
+    const cutoff = nowMs() - lbSecs*1000;
+    let any = false;
+    for(const sym of SYMBOLS){
+      const timesSrc = chart_times[sym] || [];
+      const seriesSrc = chart_series[sym] || [];
+      if(!timesSrc.length || !seriesSrc.length) continue;
+      let start = 0;
+      while(start < timesSrc.length && timesSrc[start] < cutoff) start++;
+      const times = timesSrc.slice(start);
+      const series = seriesSrc.slice(start);
+      if(!times.length || !series.length) continue;
+      let candles = [];
+      if(mode === 'candle'){
+        const candleSrc = chart_candles[sym] || [];
+        if(candleSrc.length){
+          candles = candleSrc.filter(c=>Number.isFinite(c.t) && c.t >= cutoff).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c }));
+        }
+        if(!candles.length){
+          candles = times.map((t,i)=>({ t, o:series[i], h:series[i], l:series[i], c:series[i] }));
+        }
+      } else {
+        const candleSrc = chart_candles[sym] || [];
+        candles = candleSrc.filter(c=>Number.isFinite(c.t) && c.t >= cutoff).map(c=>({ t:c.t, o:c.o, h:c.h, l:c.l, c:c.c }));
+      }
+      applyChartData(sym, times, series, candles);
+      any = true;
+    }
+    return any;
+  }
+
+  async function prefetchLookback(idx, mode = CHART_MODE){
+    if(idx < 0 || idx >= LOOKBACKS_CHART.length) return;
+    const source = mode === 'candle' ? chart_cache_candle : chart_cache_line;
+    if(SYMBOLS.every(sym => source[sym] && source[sym][idx])) return;
+    const endMs = nowMs();
+    const lookbackSecs = (LOOKBACKS_CHART[idx] && LOOKBACKS_CHART[idx][1]) || (24*60*60);
+    const startMs = endMs - lookbackSecs*1000;
+    const interval = getChartIntervalForLookback(idx, mode);
+    const results = await Promise.all(SYMBOLS.map(sym => fetchCandles(sym, interval, startMs, endMs).catch(()=>[])));
+    results.forEach((data, i)=>{
+      const sym = SYMBOLS[i];
+      const times = [], series = [], candles = [];
+      if(Array.isArray(data)){
+        for(const c of data){
+          try{
+            let ts, open, high, low, close;
+            if (c && typeof c === 'object' && !Array.isArray(c)) {
+              ts = +(c.t ?? c.startTime ?? c[0]);
+              open = +(c.o ?? c.open ?? c[1]);
+              high = +(c.h ?? c.high ?? c[2]);
+              low = +(c.l ?? c.low ?? c[3]);
+              close = +(c.c ?? c.close ?? c[4]);
+            } else if (Array.isArray(c)) {
+              ts = +c[0]; open = +c[1]; high = +c[2]; low = +c[3]; close = +c[4];
+            }
+            if (Number.isFinite(ts)) {
+              const tms = toMs(ts);
+              times.push(tms); series.push(close);
+              candles.push({ t:tms, o:open, h:high, l:low, c:close });
+            }
+          }catch{}
+        }
+      }
+      writeChartCache(sym, idx, mode, times, series, candles);
+    });
+  }
+
+  function prefetchAdjacentLookbacks(){
+    const targets = [CHART_LOOKBACK_IDX - 1, CHART_LOOKBACK_IDX + 1].filter(i=>i>=0 && i<LOOKBACKS_CHART.length);
+    targets.forEach(i => { prefetchLookback(i, CHART_MODE).catch(()=>{}); });
   }
 
   async function postInfo(payload){
@@ -2134,11 +2341,13 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   const reqId = Math.random().toString(36).slice(2);
   refreshAllCharts.__lastReq = reqId;
   ensureChartIdx();
+  const targetIdx = CHART_LOOKBACK_IDX;
+  const targetMode = CHART_MODE;
   const endMs  = nowMs();
-  const lookbackSecs = (LOOKBACKS_CHART[CHART_LOOKBACK_IDX] && LOOKBACKS_CHART[CHART_LOOKBACK_IDX][1]) || (24*60*60);
+  const lookbackSecs = (LOOKBACKS_CHART[targetIdx] && LOOKBACKS_CHART[targetIdx][1]) || (24*60*60);
   const startMs= endMs - lookbackSecs*1000;
 
-    const interval = getChartInterval();
+    const interval = getChartIntervalForLookback(targetIdx, targetMode);
     const results = await Promise.all(
       SYMBOLS.map(sym => fetchCandles(sym, interval, startMs, endMs).catch(()=>[]))
     );
@@ -2175,10 +2384,8 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
         }
       }
 
-      chart_series[sym] = series;
-      chart_times[sym]  = times;
-      chart_candles[sym] = candles;
-      hasSnapshot[sym] = true;
+      applyChartData(sym, times, series, candles);
+      writeChartCache(sym, targetIdx, targetMode, times, series, candles);
 
       // apply any buffered live point captured before the snapshot
       const pending = pendingLive[sym];
@@ -2202,6 +2409,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     });
 
     _changed = true;
+    prefetchAdjacentLookbacks();
     if(AXIS_DEBUG) console.debug('refreshAllCharts done', {now: nowMs(), selected: SYMBOLS[_selected_idx], hasSnapshot});
     renderAxis(); // sync the label immediately
   }
@@ -2216,19 +2424,35 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   }
 
   // Show loading state in legend while a refresh is in flight
-  async function refreshAllChartsWithLoading(){
-  // Show loading overlay and a loading state in the periods subsection without removing the canvas
-  const periodsEl = document.getElementById('chartPeriods');
-  const legend = document.getElementById('chartLegend');
-  const overlay = document.querySelector('.panel-chart .loading-overlay');
-  if(overlay) { overlay.classList.add('visible'); LAST_CHART_PERIODS_IDX = null; }
-  try{ await refreshAllCharts(); }catch(e){}
-  if(overlay) overlay.classList.remove('visible');
-  // drawChart will rebuild/populate subsections and redraw
-  drawChart();
+  let CHART_REFRESH_PENDING = false;
+  async function refreshAllChartsWithLoading({ showOverlay = true } = {}){
+    if(CHART_REFRESH_INFLIGHT){ CHART_REFRESH_PENDING = true; return; }
+    CHART_REFRESH_INFLIGHT = true;
+    // Show loading overlay and a loading state in the periods subsection without removing the canvas
+    const periodsEl = document.getElementById('chartPeriods');
+    const legend = document.getElementById('chartLegend');
+    const overlay = document.querySelector('.panel-chart .loading-overlay');
+    if(overlay && showOverlay) { overlay.classList.add('visible'); LAST_CHART_PERIODS_IDX = null; }
+    try{ await refreshAllCharts(); }catch(e){}
+    if(overlay) overlay.classList.remove('visible');
+    CHART_REFRESH_INFLIGHT = false;
+    // drawChart will rebuild/populate subsections and redraw
+    drawChart();
+    if(CHART_REFRESH_PENDING){
+      CHART_REFRESH_PENDING = false;
+      debouncedRefreshCharts({ showOverlay: false });
+    }
   }
 
-  const debouncedRefreshCharts = debounce(refreshAllChartsWithLoading, 240);
+  const debouncedRefreshCharts = debounce(refreshAllChartsWithLoading, 80);
+  function requestChartRefresh({ drawNow = true, showOverlay = true } = {}){
+    if(drawNow){ try{ drawChart(); }catch(e){} }
+    if(SHOW_CHART){
+      if(showOverlay) showChartOverlayInstant();
+      debouncedRefreshCharts({ showOverlay });
+      _changed = true;
+    }
+  }
 
   /* ---------- WS ---------- */
   let ws=null, hbTimer=null, reconnTimer=null;
@@ -2339,6 +2563,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     _selected_idx = (_selected_idx + delta + n) % n;
     updateSelectionDots();
     drawChart();
+    try{ savePersisted(); }catch(e){}
   }
   function applyChartClass(){
     document.body.classList.toggle('chart-off', !SHOW_CHART);
@@ -2354,7 +2579,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   async function toggleChart(){
     SHOW_CHART = !SHOW_CHART;
     applyChartClass();
-  if(SHOW_CHART){ debouncedRefreshCharts(); }
+    if(SHOW_CHART){ requestChartRefresh({ drawNow: true, showOverlay: false }); }
     updateSelectionDots();
     drawChart();
   try{ savePersisted(); }catch(e){}
@@ -2374,12 +2599,15 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   if(e.key==="e"||e.key==="E"){ e.preventDefault(); toggleBulkEditor(); return; }
   if(e.key==="t"||e.key==="T"){ e.preventDefault(); THEME = (THEME === 'light' ? 'dark' : 'light'); applyTheme(); try{ savePersisted(); }catch(e){} drawChart(); updateTable(); return; }
   if(e.key==="d"||e.key==="D"){ e.preventDefault(); CHART_DEBUG = !CHART_DEBUG; clearOverlay(); drawChart(); return; }
+  if(e.key==="i"||e.key==="I"){ e.preventDefault(); QUIET_MODE = !QUIET_MODE; rebuildTable(); try{ savePersisted(); }catch(e){} return; }
+  if(e.key==="Shift"){ if(!COMPARE_ACTIVE){ COMPARE_ACTIVE = true; drawChart(); } return; }
     if(e.key==="v"||e.key==="V"){ e.preventDefault();
   // toggle between line and candle modes
   CHART_MODE = (CHART_MODE === 'line') ? 'candle' : 'line';
     document.body.classList.toggle('line-mode', CHART_MODE === 'line');
-  // refresh chart data using appropriate interval (debounced)
-    try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
+  // instant apply from cache (or derived window) before async refresh
+    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
+    try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
       return;
     }
@@ -2389,14 +2617,23 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
     else if(e.key==="ArrowLeft"){ e.preventDefault();
       // move to previous lookback
   CHART_LOOKBACK_IDX = (CHART_LOOKBACK_IDX - 1 + LOOKBACKS_CHART.length) % LOOKBACKS_CHART.length;
-    try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
+    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
+    try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
     }
     else if(e.key==="ArrowRight"){ e.preventDefault();
       // move to next lookback
   CHART_LOOKBACK_IDX = (CHART_LOOKBACK_IDX + 1) % LOOKBACKS_CHART.length;
-    try{ if(SHOW_CHART){ showChartOverlayInstant(); debouncedRefreshCharts(); _changed=true; } }catch(e){}
+    if(!applyCachedLookback(CHART_LOOKBACK_IDX, CHART_MODE)) applyDerivedLookbackFromCurrent(CHART_LOOKBACK_IDX, CHART_MODE);
+    try{ requestChartRefresh({ drawNow: true, showOverlay: false }); }catch(e){}
   try{ savePersisted(); }catch(e){}
+    }
+  }, {capture:true});
+
+  window.addEventListener("keyup", (e)=>{
+    if(e.key === "Shift" && COMPARE_ACTIVE){
+      COMPARE_ACTIVE = false;
+      drawChart();
     }
   }, {capture:true});
 
@@ -2449,6 +2686,7 @@ html.touch input, html.touch textarea, html.touch select, html.touch [contentedi
   async function main(){
   try{ loadPersisted(); }catch(e){}
   try{ ensureChartIdx(); }catch(e){}
+  try{ clampSelectedIdx(); }catch(e){}
   applyTheme();
   // Apply initial chart mode class for line-mode specific styling
   document.body.classList.toggle('line-mode', CHART_MODE === 'line');
